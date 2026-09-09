@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Hide and Seek</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- LANDING -->
+<div id="view-landing" class="view active">
+  <h1>Hide &amp; Seek</h1>
+
+  <div class="card">
+    <h2>Host a game</h2>
+    <input id="input-name-host" placeholder="Your name">
+    <label>Play area (metres, square side)</label>
+    <input id="input-area-side" type="number" value="400">
+    <label>Game length (minutes)</label>
+    <input id="input-length" type="number" value="90">
+    <button id="btn-host">Host Game</button>
+  </div>
+
+  <div class="card">
+    <h2>Join a game</h2>
+    <input id="input-name-join" placeholder="Your name">
+    <input id="input-code" placeholder="Game code">
+    <button id="btn-join">Join Game</button>
+  </div>
+</div>
+
+<!-- LOBBY -->
+<div id="view-lobby" class="view">
+  <h1>Lobby</h1>
+  <p>Game code: <strong id="lobby-code"></strong></p>
+  <p>Give this code to everyone joining.</p>
+  <ul id="lobby-players"></ul>
+
+  <div id="host-controls" style="display:none">
+    <label>Number of seekers</label>
+    <input id="input-num-seekers" type="number" value="1" min="1">
+    <button id="btn-assign-roles">Randomly Assign Roles</button>
+    <button id="btn-start-game">Start Game</button>
+  </div>
+</div>
+
+<!-- GAME -->
+<div id="view-game" class="view">
+  <div id="hud">
+    <span id="timer">--:--</span>
+    <span>Charge: <span id="charge-value">100</span></span>
+    <span>Your code: <strong id="my-code">----</strong></span>
+  </div>
+  <div id="map"></div>
+  <button id="btn-open-capture" class="fab">Capture</button>
+</div>
+
+<!-- CAPTURE MODAL -->
+<div id="capture-modal" class="modal">
+  <div class="modal-inner">
+    <h3>Enter their code</h3>
+    <input id="input-capture-code" maxlength="4" placeholder="XXXX" autocapitalize="characters">
+    <div class="modal-buttons">
+      <button id="btn-cancel-capture">Cancel</button>
+      <button id="btn-confirm-capture">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- END -->
+<div id="view-end" class="view">
+  <h1>Game Over</h1>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script src="js/firebase-config.js"></script>
+<script src="js/config.js"></script>
+<script src="js/geo.js"></script>
+<script src="js/app.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
