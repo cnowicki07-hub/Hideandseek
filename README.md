@@ -48,17 +48,31 @@ npx serve .
 Open the printed URL on your phone (same wifi as your laptop), or open it
 in a desktop browser for a first pass.
 
-### Playing without Firebase
+### Playing without Firebase, on one machine
 
 While `js/firebase-config.js` still says `REPLACE_ME`, the app uses an
 in-memory stand-in for Firestore (`js/devmode.js`) that shares state
-between **tabs of the same browser**. That is enough to walk through a
-whole game by yourself:
+between **tabs of the same browser**. That is enough to walk a whole game
+through by yourself. Serve the folder, then open one tab per player:
 
-- open five tabs, each with `?pid=p0` … `?pid=p4` so they count as
-  different players
-- add `&sim=51.5074,-0.1278` to give a tab a fake GPS position, then move
-  it from the console with `__sim.moveBy(eastMetres, northMetres)`
+```
+http://localhost:3000/?pid=p0&sim=51.5074,-0.1278     <- host
+http://localhost:3000/?pid=p1&sim=51.5077,-0.1275
+http://localhost:3000/?pid=p2&sim=51.5071,-0.1281
+```
+
+- `?pid=` gives each tab its own player identity. **Without it every tab
+  is the same player**, because they share one browser profile.
+- `?sim=lat,lng` replaces GPS with a position that tab controls. Move it
+  from that tab's console: `__sim.moveBy(20, -35)` walks 20m east and 35m
+  south; `__sim.setPos(lat, lng)` teleports.
+- Three tabs is the useful minimum (one seeker, two hiders — sabotage
+  needs two hiders standing together).
+
+Then: host names themselves and hosts, draws a boundary by tapping the
+lobby map, others join with the code, host assigns roles and starts.
+**Set the head start to 0 in the lobby** or seekers will sit still for
+several minutes before they're released.
 
 Add `?mock=1` to force the stand-in even after real credentials are in —
 useful for rehearsing without touching the live game.

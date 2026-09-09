@@ -29,6 +29,19 @@ const BOUNDARY = [off(-300, -300), off(300, -300), off(300, 300), off(-300, 300)
 
 const results = [];
 const errors = [];
+
+// Poll until a condition holds rather than sleeping a fixed amount: state
+// crosses tabs asynchronously and fixed waits make these checks flaky.
+async function until(page, fn, arg, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  for (;;) {
+    last = await page.evaluate(fn, arg);
+    if (last) return last;
+    if (Date.now() > deadline) return last;
+    await page.waitForTimeout(250);
+  }
+}
 function check(name, pass, detail) {
   results.push({ name, pass, detail });
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
@@ -311,8 +324,13 @@ const sweepWhileDark = await pages[2].evaluate(() => {
 await pages[2].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(-100, 40));
 await host.waitForTimeout(1200);
 await runPower(2, 'uncloak');
-await host.waitForTimeout(600);
-const afterUncloak = await host.evaluate(() => ({
+const afterUncloak = await until(host, () => {
+  const r = {
+    dark: isSeekerDark(playersState.p1),
+    forced: playersState.p1.forcedBroadcastUntil > Date.now(),
+  };
+  return (r.dark === false && r.forced === true) ? r : null;
+}) || await host.evaluate(() => ({
   dark: isSeekerDark(playersState.p1),
   forced: playersState.p1.forcedBroadcastUntil > Date.now(),
 }));
@@ -324,11 +342,9 @@ check('uncloak forces a nearby dark seeker back into broadcast',
 await pages[3].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(-100, 45));
 await host.waitForTimeout(1000);
 await runPower(1, 'beacon', { targetId: 'p2' });
-await host.waitForTimeout(500);
-const beaconed = await host.evaluate(() => playersState.p2.beaconedUntil > Date.now());
+const beaconed = await until(host, () => playersState.p2.beaconedUntil > Date.now());
 check('beacon lights up the target', beaconed);
-await host.waitForTimeout(4000);
-const spread = await host.evaluate(() => playersState.p3.beaconedUntil > Date.now());
+const spread = await until(host, () => playersState.p3.beaconedUntil > Date.now());
 check('beacon spreads to a hider within 30m', spread);
 await host.evaluate(() => Promise.all([
   playerRef('p2').update({ beaconedUntil: 0 }),
@@ -344,8 +360,10 @@ const twCount = await host.evaluate(() => Object.keys(tripwiresState).length);
 check('tripwire is placed', twCount === 1);
 
 await pages[4].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 195));
-await host.waitForTimeout(5000);
-const tripped = await host.evaluate(() => Object.values(tripwiresState)[0].triggered);
+const tripped = await until(host, () => {
+  const tw = Object.values(tripwiresState)[0];
+  return !!(tw && tw.triggered);
+});
 check('a hider walking within 20m trips the wire', tripped === true);
 
 await runPower(1, 'tripwire');
@@ -384,7 +402,7 @@ check('sabotage time is radius/25 minutes',
 
 // A hider inside the radius triggers an anonymous ping.
 await pages[2].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(30, 30));
-await host.waitForTimeout(5000);
+await until(host, () => (Object.values(totemsState)[0].recentPings || []).length >= 1);
 const pinged = await host.evaluate(() => Object.values(totemsState)[0].recentPings || []);
 check('totem pings anonymously while a hider is inside', pinged.length >= 1,
   `${pinged.length} ping(s)`);
@@ -407,7 +425,7 @@ check('other hiders can see one hider waiting at the totem', waitingFlag === 1);
 
 // Second hider arrives: progress accrues, totem greys out.
 await pages[3].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(2, -2));
-await host.waitForTimeout(8000);
+await until(host, () => (Object.values(totemsState)[0].sabotageProgressS || 0) > 2, null, 20000);
 const joint = await host.evaluate(() => {
   const t = Object.values(totemsState)[0];
   return { progress: t.sabotageProgressS || 0, sabotaging: isBeingSabotaged(t), present: freshPresenceIds(t).length };
@@ -438,7 +456,7 @@ await host.evaluate(async () => {
     sabotageProgressS: t.requiredS - 1, lastAccrualAt: Date.now(),
   });
 });
-await host.waitForTimeout(6000);
+await until(host, () => Object.values(totemsState)[0].status === 'destroyed', null, 20000);
 const destroyed = await host.evaluate(() => Object.values(totemsState)[0].status);
 check('sabotage completes and destroys the totem', destroyed === 'destroyed', destroyed);
 
@@ -531,7 +549,7 @@ check('signposts are anonymous to readers but attributable internally',
 
 // Boundary breach.
 await pages[4].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 500));
-await host.waitForTimeout(12000);
+await until(host, () => !!playersState.p4.breachStartedAt, null, 25000);
 const breach = await host.evaluate(() => ({
   readings: playersState.p4.outOfBoundsReadings,
   started: !!playersState.p4.breachStartedAt,
@@ -539,8 +557,11 @@ const breach = await host.evaluate(() => ({
 check('leaving the boundary starts a confirmed breach countdown',
   breach.readings >= 3 && breach.started, `${breach.readings} consecutive readings`);
 
-const exposed = await host.evaluate(() => {
+// The forced exposure lands on the breaching player's next fix, a beat
+// after the breach flag itself propagates.
+const exposed = await until(host, () => {
   const h = playersState.p4;
+  if (!h.broadcastLat) return false;
   return distanceM({ lat: h.realLat, lng: h.realLng }, { lat: h.broadcastLat, lng: h.broadcastLng }) < 5;
 });
 check('a breaching hider pings their true position continuously', exposed === true);
@@ -597,7 +618,7 @@ check('panic broadcasts an exact position and message to everyone',
   panic.msg === 'twisted ankle by the fallen tree');
 
 // Elimination mode ends the game once no hiders remain.
-await host.waitForTimeout(5000);
+await until(host, () => gameState.status === 'ended', null, 20000);
 const ended = await host.evaluate(() => gameState.status);
 check('elimination mode ends the game when the last hider is gone', ended === 'ended', ended);
 await host.waitForTimeout(700);
@@ -609,7 +630,7 @@ check('scoreboard scores only players who were hiders', board.rows.length === 3,
   `${board.rows.length} rows: ${board.rows.join(' | ')}`);
 check('original seekers are listed separately, not ranked',
   !board.rows.some((r) => r.startsWith('Host') || r.startsWith('Seek2')) &&
-  board.summary.includes('Seekers: Host, Seek2'), board.summary);
+  /Seekers: (Host, Seek2|Seek2, Host)\./.test(board.summary), board.summary);
 check('outcomes are labelled in plain language',
   board.rows.some((r) => r.includes('(found)')) &&
   board.rows.some((r) => r.includes('(withdrew)')) &&
