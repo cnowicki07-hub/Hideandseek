@@ -70,6 +70,21 @@ check('boundary sets M from drawn area', Math.abs(boundaryInfo.M - 600) < 10,
 check('head start computed from diagonal', boundaryInfo.headstartMs > 0,
   `${Math.round(boundaryInfo.headstartMs / 60000)} min`);
 
+// The host may override the computed head start (design doc Section 2).
+await host.waitForTimeout(400);
+const shownHeadstart = await host.inputValue('#input-headstart');
+await host.fill('#input-headstart', '2');
+await host.dispatchEvent('#input-headstart', 'change');
+await host.waitForTimeout(500);
+const overridden = await host.evaluate(() => gameState.headstartMs);
+check('host can override the computed head start',
+  overridden === 120000, `computed ${shownHeadstart} min, set to ${overridden / 60000} min`);
+await host.fill('#input-headstart', '0');
+await host.dispatchEvent('#input-headstart', 'change');
+await host.waitForTimeout(400);
+const zeroed = await host.evaluate(() => gameState.headstartMs);
+check('head start can be set to zero for testing', zeroed === 0);
+
 // ---- everyone else joins ----
 const starts = [off(50, 0), off(-100, 40), off(120, -80), off(-40, -150)];
 for (let i = 1; i < 5; i++) {

@@ -143,11 +143,23 @@ el('btn-boundary-save').onclick = async () => {
 function updateHeadstartInfo() {
   const g = gameState;
   if (!g) return;
-  const mins = Math.round((g.headstartMs || 0) / 60000);
+  const field = el('input-headstart');
+  // Don't fight the host while they are typing in it.
+  if (field && document.activeElement !== field) {
+    field.value = ((g.headstartMs || 0) / 60000).toFixed(1).replace(/\.0$/, '');
+  }
+  const mins = ((g.headstartMs || 0) / 60000).toFixed(1).replace(/\.0$/, '');
   el('headstart-info').textContent = g.headstartMs
     ? `Hiders get a ${mins} min head start before seekers are released.`
-    : 'No head start (draw a boundary to compute one).';
+    : 'No head start — seekers are released immediately.';
 }
+
+el('input-headstart').onchange = async () => {
+  const mins = parseFloat(el('input-headstart').value);
+  if (isNaN(mins) || mins < 0) return;
+  await gameRef().update({ headstartMs: Math.round(mins * 60000) });
+  toast(mins ? `Head start set to ${mins} min.` : 'Head start removed.');
+};
 
 // ---------- lobby: loadout ----------
 
