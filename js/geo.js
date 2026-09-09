@@ -49,6 +49,95 @@ function huntConeHalfWidthDeg(distM) {
   return (coneDegAt100m + t * (coneDegAt500m - coneDegAt100m)) / 2;
 }
 
+// ---------- polygon helpers (boundary) ----------
+
+// Project lat/lng to local metres about an origin. Fine for play areas of a
+// few km — avoids pulling in a projection library.
+function toLocalM(origin, p) {
+  return {
+    x: (p.lng - origin.lng) * 111320 * Math.cos(toRad(origin.lat)),
+    y: (p.lat - origin.lat) * 111320,
+  };
+}
+
+function polygonAreaM2(points) {
+  if (!points || points.length < 3) return 0;
+  const o = points[0];
+  const pts = points.map((p) => toLocalM(o, p));
+  let sum = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(sum / 2);
+}
+
+function pointInPolygon(point, points) {
+  if (!points || points.length < 3) return true;
+  const o = points[0];
+  const pts = points.map((p) => toLocalM(o, p));
+  const q = toLocalM(o, point);
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const intersects = (pts[i].y > q.y) !== (pts[j].y > q.y) &&
+      q.x < ((pts[j].x - pts[i].x) * (q.y - pts[i].y)) / (pts[j].y - pts[i].y) + pts[i].x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function distancePointToSegmentM(q, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(q.x - a.x, q.y - a.y);
+  let t = ((q.x - a.x) * dx + (q.y - a.y) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(q.x - (a.x + t * dx), q.y - (a.y + t * dy));
+}
+
+// Shortest distance from a point to the polygon outline, in metres.
+function distanceToPolygonEdgeM(point, points) {
+  if (!points || points.length < 3) return Infinity;
+  const o = points[0];
+  const pts = points.map((p) => toLocalM(o, p));
+  const q = toLocalM(o, point);
+  let best = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    best = Math.min(best, distancePointToSegmentM(q, pts[i], pts[(i + 1) % pts.length]));
+  }
+  return best;
+}
+
+function polygonLongestDiagonalM(points) {
+  let best = 0;
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      best = Math.max(best, distanceM(points[i], points[j]));
+    }
+  }
+  return best;
+}
+
+function polygonCentroid(points) {
+  const lat = points.reduce((s, p) => s + p.lat, 0) / points.length;
+  const lng = points.reduce((s, p) => s + p.lng, 0) / points.length;
+  return { lat, lng };
+}
+
+// Vertices of a pie wedge, for rendering a Smear arc.
+function arcPolygon(center, bearing, halfWidthDeg, radiusM, steps) {
+  const pts = [[center.lat, center.lng]];
+  const n = steps || 16;
+  for (let i = 0; i <= n; i++) {
+    const b = bearing - halfWidthDeg + (2 * halfWidthDeg * i) / n;
+    const p = destinationPoint(center, b, radiusM);
+    pts.push([p.lat, p.lng]);
+  }
+  return pts;
+}
+
 // Random point-in-circle, used for totem anonymous pings and hider
 // uncertainty display when we want a random point rather than a
 // drawn circle (Leaflet draws the circle directly from radius, so

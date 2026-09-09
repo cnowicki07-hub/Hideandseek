@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Hide and Seek</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -16,17 +16,22 @@
   <div class="card">
     <h2>Host a game</h2>
     <input id="input-name-host" placeholder="Your name">
-    <label>Play area (metres, square side)</label>
+    <label>Play area (metres, square side) — refine by drawing a boundary next</label>
     <input id="input-area-side" type="number" value="400">
     <label>Game length (minutes)</label>
     <input id="input-length" type="number" value="90">
+    <label>End condition</label>
+    <select id="input-end-mode">
+      <option value="elimination">Elimination — ends when every hider is found</option>
+      <option value="time_limit">Time limit — survivors win at the clock</option>
+    </select>
     <button id="btn-host">Host Game</button>
   </div>
 
   <div class="card">
     <h2>Join a game</h2>
     <input id="input-name-join" placeholder="Your name">
-    <input id="input-code" placeholder="Game code">
+    <input id="input-code" placeholder="Game code" autocapitalize="characters">
     <button id="btn-join">Join Game</button>
   </div>
 </div>
@@ -34,27 +39,61 @@
 <!-- LOBBY -->
 <div id="view-lobby" class="view">
   <h1>Lobby</h1>
-  <p>Game code: <strong id="lobby-code"></strong></p>
-  <p>Give this code to everyone joining.</p>
+  <p>Game code: <strong id="lobby-code" class="bigcode"></strong></p>
+  <p class="muted">Give this code to everyone joining.</p>
   <ul id="lobby-players"></ul>
 
+  <div class="card" id="loadout-card">
+    <h2>Your loadout</h2>
+    <p class="muted">Hiders pick 3–4 powers. Ignored if you end up a seeker.</p>
+    <div id="loadout-options"></div>
+    <p class="muted" id="loadout-count"></p>
+  </div>
+
   <div id="host-controls" style="display:none">
-    <label>Number of seekers</label>
-    <input id="input-num-seekers" type="number" value="1" min="1">
-    <button id="btn-assign-roles">Randomly Assign Roles</button>
-    <button id="btn-start-game">Start Game</button>
+    <div class="card">
+      <h2>Boundary</h2>
+      <p class="muted">Tap the map to drop corners. Three or more sets the play area,
+        which drives every distance rule in the game.</p>
+      <div id="boundary-map"></div>
+      <div class="row">
+        <button id="btn-boundary-undo" class="secondary">Undo</button>
+        <button id="btn-boundary-clear" class="secondary">Clear</button>
+        <button id="btn-boundary-save">Use this boundary</button>
+      </div>
+      <p class="muted" id="boundary-info">No boundary drawn — using the square area you entered.</p>
+    </div>
+
+    <div class="card">
+      <h2>Start</h2>
+      <label>Number of seekers</label>
+      <input id="input-num-seekers" type="number" value="1" min="1">
+      <button id="btn-assign-roles" class="secondary">Randomly Assign Roles</button>
+      <p class="muted" id="headstart-info"></p>
+      <button id="btn-start-game">Start Game</button>
+    </div>
   </div>
 </div>
 
 <!-- GAME -->
 <div id="view-game" class="view">
   <div id="hud">
-    <span id="timer">--:--</span>
-    <span>Charge: <span id="charge-value">100</span></span>
-    <span>Your code: <strong id="my-code">----</strong></span>
+    <span class="hud-item"><strong id="timer">--:--</strong></span>
+    <span class="hud-item" id="hud-role">—</span>
+    <span class="hud-item">⚡ <strong id="charge-value">100</strong></span>
+    <span class="hud-item">Code <strong id="my-code">----</strong></span>
   </div>
+  <div id="banner-strip"></div>
   <div id="map"></div>
-  <button id="btn-open-capture" class="fab">Capture</button>
+
+  <div id="action-bar">
+    <div id="power-buttons"></div>
+    <div id="action-buttons"></div>
+  </div>
+
+  <button id="btn-panic" class="panic-fab">PANIC<br><span>hold</span></button>
+  <div id="targeting-prompt" class="targeting-prompt"></div>
+  <div id="toast-host"></div>
 </div>
 
 <!-- CAPTURE MODAL -->
@@ -62,9 +101,77 @@
   <div class="modal-inner">
     <h3>Enter their code</h3>
     <input id="input-capture-code" maxlength="4" placeholder="XXXX" autocapitalize="characters">
+    <div id="capture-confirm" style="display:none">
+      <p>Confirm capture: <strong id="capture-name"></strong>?</p>
+    </div>
     <div class="modal-buttons">
-      <button id="btn-cancel-capture">Cancel</button>
-      <button id="btn-confirm-capture">Confirm</button>
+      <button id="btn-cancel-capture" class="secondary">Cancel</button>
+      <button id="btn-confirm-capture">Check code</button>
+    </div>
+  </div>
+</div>
+
+<!-- PLAYER TARGET MODAL -->
+<div id="target-modal" class="modal">
+  <div class="modal-inner">
+    <h3 id="target-title">Choose a target</h3>
+    <ul id="target-list" class="pick-list"></ul>
+    <div class="modal-buttons">
+      <button id="btn-cancel-target" class="secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- SNITCH MODAL -->
+<div id="snitch-modal" class="modal">
+  <div class="modal-inner">
+    <h3>Sell someone out</h3>
+    <p class="muted">Pick one. Their position goes to the seeker hunting you.
+      They are never told.</p>
+    <ul id="snitch-list" class="pick-list"></ul>
+    <div class="modal-buttons">
+      <button id="btn-cancel-snitch" class="secondary">Keep quiet</button>
+    </div>
+  </div>
+</div>
+
+<!-- SIGNPOST MODAL -->
+<div id="signpost-modal" class="modal">
+  <div class="modal-inner">
+    <h3>Signposts here</h3>
+    <ul id="signpost-list" class="sign-list"></ul>
+    <input id="input-signpost" maxlength="120" placeholder="Leave a message (anonymous)">
+    <div class="modal-buttons">
+      <button id="btn-cancel-signpost" class="secondary">Close</button>
+      <button id="btn-place-signpost">Leave sign</button>
+    </div>
+  </div>
+</div>
+
+<!-- PANIC MODAL -->
+<div id="panic-modal" class="modal">
+  <div class="modal-inner panic-inner">
+    <h3>Send a panic alert?</h3>
+    <p>Your exact position and this message go to <strong>everyone</strong> in the game
+      immediately, and your game ends.</p>
+    <p class="warn">This is not a connection to emergency services.
+      Call your local emergency number for anything urgent.</p>
+    <input id="input-panic-msg" maxlength="120" placeholder="Optional: what's wrong / where you are">
+    <div class="modal-buttons">
+      <button id="btn-cancel-panic" class="secondary">Cancel</button>
+      <button id="btn-confirm-panic" class="danger">Send alert</button>
+    </div>
+  </div>
+</div>
+
+<!-- MENU MODAL -->
+<div id="menu-modal" class="modal">
+  <div class="modal-inner">
+    <h3>Menu</h3>
+    <div id="host-live-controls"></div>
+    <button id="btn-quit" class="secondary">Quit the game</button>
+    <div class="modal-buttons">
+      <button id="btn-cancel-menu" class="secondary">Close</button>
     </div>
   </div>
 </div>
@@ -72,16 +179,22 @@
 <!-- END -->
 <div id="view-end" class="view">
   <h1>Game Over</h1>
+  <p id="end-summary" class="muted"></p>
+  <ol id="scoreboard" class="scoreboard"></ol>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
 
+<script src="js/devmode.js"></script>
 <script src="js/firebase-config.js"></script>
 <script src="js/config.js"></script>
 <script src="js/geo.js"></script>
 <script src="js/app.js"></script>
+<script src="js/powers.js"></script>
+<script src="js/world.js"></script>
+<script src="js/hunt.js"></script>
 <script src="js/ui.js"></script>
 </body>
 </html>

@@ -5,6 +5,11 @@
 const CONFIG = {
   baseAccuracyRadiusM: 10,
   gameLengthMin: 90,
+  endConditionMode: 'elimination', // or 'time_limit'
+
+  // How often each client runs its local rules pass (boundary, sabotage,
+  // beacon contagion, tripwires, totem pings, hunt bearings).
+  tickMs: 3000,
 
   charge: {
     cap: 100,
@@ -27,26 +32,27 @@ const CONFIG = {
     growthRateMPerMinPhase3: 20,
     uncertaintyCapFraction: 0.5, // fraction of M
     movingThresholdMPerMin: 20, // speed above this = "moving" state
+    historyLength: 3, // pings retained for Backtrace
   },
 
   hiderPowers: {
-    smear: { cost: 20, durationMs: null }, // applies to next ping only
-    false_trail: { cost: 20, durationMs: null },
+    smear: { cost: 20, durationMs: null, arcHalfWidthDeg: 45 }, // applies to next ping only
+    false_trail: { cost: 20, durationMs: 5 * 60000 },
     disarm: { cost: 20, radiusM: 50 },
     go_quiet: { cost: 30, durationMs: null }, // skips next ping
     uncloak: { cost: 30, radiusM: 300, forceBroadcastMs: 60000 },
-    read_the_sweep: { cost: 30, durationMs: 30000 },
+    read_the_sweep: { cost: 30, durationMs: 30000, seekerCoverageRadiusM: 100 },
     silent_run: { cost: 60, durationMs: 3 * 60000 },
-    decoy: { cost: 60, durationMs: 3 * 60000 },
+    decoy: { cost: 60, durationMs: 3 * 60000, paceKmh: 3 },
   },
 
   seekerPowers: {
     probe: { cost: 20, radiusM: 100 },
-    backtrace: { cost: 20 },
+    backtrace: { cost: 20, displayMs: 30000 },
     tripwire: { cost: 30, triggerRadiusM: 20 },
     go_dark: { cost: 30, durationMs: 3 * 60000 },
     lockout: { cost: 30, durationMs: 3 * 60000 },
-    scan: { cost: 45, radiusM: 100 },
+    scan: { cost: 45, radiusM: 100, displayMs: 15000 },
     beacon: { cost: 45, radiusM: 30, durationMs: 5 * 60000 },
     cordon: { cost: 40, radiusM: 150, durationMs: 5 * 60000 },
     totem: { cost: 60, maxUndeployed: 2, maxLive: 10 },
@@ -67,6 +73,12 @@ const CONFIG = {
     pingIntervalMs: 60000,
     sabotageMinParticipants: 2,
     sabotageDecayRate: 0.5,
+    // Sabotage requires participants within the game's base accuracy radius
+    // of the totem centre (design doc Section 3, "sabotage precision radius"
+    // — never smaller than base GPS accuracy).
+    sabotageTimeDivisor: 25, // radius_m / 25 = minutes
+    sabotageMaxMin: 10,
+    presenceStaleMs: 8000, // a presence heartbeat older than this doesn't count
   },
 
   hunt: {
@@ -77,9 +89,21 @@ const CONFIG = {
     coneDegAt100m: 10,
   },
 
+  signposts: {
+    readRadiusM: 18,
+    cost: 0,
+    maxLength: 120,
+  },
+
   boundary: {
     warningZoneM: 20,
     breachTimerMs: 3 * 60000,
+    confirmReadings: 3, // consecutive out-of-bounds fixes before a breach counts
+  },
+
+  headstart: {
+    walkingPaceKmh: 3,
+    diagonalFraction: 0.5,
   },
 
   offline: {
@@ -91,4 +115,13 @@ const CONFIG = {
 // M = sqrt(boundary area). Set once the host draws/enters the play area.
 function computeM(areaM2) {
   return Math.sqrt(areaM2);
+}
+
+function totemRadiusM(M) {
+  return CONFIG.totem.radiusFraction * M;
+}
+
+function totemSabotageSeconds(radiusM) {
+  const mins = Math.min(CONFIG.totem.sabotageMaxMin, radiusM / CONFIG.totem.sabotageTimeDivisor);
+  return mins * 60;
 }
