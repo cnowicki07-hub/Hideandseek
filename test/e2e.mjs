@@ -61,7 +61,10 @@ async function openPlayer(i, start) {
   const p = await ctx.newPage();
   p.on('pageerror', (e) => { errors.push(`${NAMES[i]}: ${e.message}`); });
   p.on('console', (m) => { if (m.type() === 'error') errors.push(`${NAMES[i]} console: ${m.text()}`); });
-  await p.goto(`http://localhost:${PORT}/?pid=p${i}&sim=${start.lat},${start.lng}`);
+  // mock=1 pins the suite to the offline harness. Without it, now that real
+  // credentials are in firebase-config.js, every run would write test games
+  // into the live Firestore project.
+  await p.goto(`http://localhost:${PORT}/?mock=1&pid=p${i}&sim=${start.lat},${start.lng}`);
   pages.push(p);
   return p;
 }

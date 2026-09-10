@@ -24,20 +24,14 @@ the head start, offline flagging and auto-elimination.
 [Before Friday](#before-friday) — this is the remaining risk, and it is
 not something that could be checked from here.
 
-## 1. Set up Firebase (~5 min, one-time, your job not the build's)
+## 1. Firebase — done
 
-1. Go to console.firebase.google.com → Create a project (any name, no
-   need to enable Analytics).
-2. In the project, click the **Web** icon (`</>`) to add a web app.
-3. Copy the `firebaseConfig` object it shows you.
-4. Paste it into `js/firebase-config.js`, replacing the placeholder.
-5. In the left sidebar: **Build → Firestore Database → Create database**.
-   Choose **test mode** (fine for a short friendly game — see Security
-   note below).
+The project `hide-and-seek-dc4ac` is wired into `js/firebase-config.js`.
+Nothing more to do there.
 
-Until you do this the app runs against an offline stand-in (below), so
-everything works on one machine but players on different phones can't see
-each other.
+The one remaining step, if it hasn't been done: **Build → Firestore
+Database → Create database → test mode**. Registering the web app does not
+create the database, and without it every read and write fails.
 
 ## 2. Test locally
 
@@ -48,17 +42,17 @@ npx serve .
 Open the printed URL on your phone (same wifi as your laptop), or open it
 in a desktop browser for a first pass.
 
-### Playing without Firebase, on one machine
+### Playing offline, on one machine
 
-While `js/firebase-config.js` still says `REPLACE_ME`, the app uses an
-in-memory stand-in for Firestore (`js/devmode.js`) that shares state
-between **tabs of the same browser**. That is enough to walk a whole game
-through by yourself. Serve the folder, then open one tab per player:
+`?mock=1` swaps Firestore for an in-memory stand-in (`js/devmode.js`) that
+shares state between **tabs of the same browser** — a whole game walked
+through by yourself, without touching the live project. Serve the folder,
+then open one tab per player:
 
 ```
-http://localhost:3000/?pid=p0&sim=51.5074,-0.1278     <- host
-http://localhost:3000/?pid=p1&sim=51.5077,-0.1275
-http://localhost:3000/?pid=p2&sim=51.5071,-0.1281
+http://localhost:3000/?mock=1&pid=p0&sim=51.5074,-0.1278     <- host
+http://localhost:3000/?mock=1&pid=p1&sim=51.5077,-0.1275
+http://localhost:3000/?mock=1&pid=p2&sim=51.5071,-0.1281
 ```
 
 - `?pid=` gives each tab its own player identity. **Without it every tab
@@ -74,8 +68,8 @@ lobby map, others join with the code, host assigns roles and starts.
 **Set the head start to 0 in the lobby** or seekers will sit still for
 several minutes before they're released.
 
-Add `?mock=1` to force the stand-in even after real credentials are in —
-useful for rehearsing without touching the live game.
+Drop `?mock=1` and the same tabs talk to the real Firestore project, which
+is how you check two actual phones can see each other.
 
 ### Automated check
 
@@ -84,7 +78,8 @@ npm i -D playwright && npx playwright install chromium
 node test/e2e.mjs
 ```
 
-Drives a full five-player game and asserts 69 rules from the design doc:
+Runs against the offline stand-in, so it never writes to the live project.
+Drives a full five-player game and asserts 71 rules from the design doc:
 ping cadence and uncertainty growth, every power's effect as seen from the
 *other* player's client, totem scaling and sabotage accrual/decay, hunt
 bearings, snitch fidelity bands, boundary breach, capture, scoring. Worth
@@ -172,13 +167,20 @@ outdoors, on real phones, before the real game:
 
 ## Security note
 
-Firestore is in test mode, meaning anyone with the project's public config
-(which is embedded in the page, always visible) can read and write any
-document while test mode is on. For five friends running a one-off game
-this is a non-issue. Test mode expires after 30 days by default — if this
-is still running past that, either extend it in the Firebase console or
-write real security rules. Don't reuse this setup for anything with
-strangers in it.
+The Firebase config in `js/firebase-config.js` is not a secret — it
+identifies the project and is designed to sit in the browser where anyone
+can read it. It is in the deployed page whether or not the repo is public,
+so hiding the repo would not hide it.
+
+What actually guards the data is Firestore security rules, and in test
+mode there are none: anyone who has that config can read and write any
+document. Since this repo is public, that means anyone who finds it, not
+just anyone with the game link. For a one-evening game among five friends
+the worst case is someone vandalising a game in progress, which is why the
+build brief traded it away deliberately.
+
+Worth doing after Friday: delete the Firebase project, or write real rules.
+Test mode also expires on its own after 30 days.
 
 ## Known limitations of this build
 
