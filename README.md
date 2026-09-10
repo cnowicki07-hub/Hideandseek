@@ -24,35 +24,36 @@ the head start, offline flagging and auto-elimination.
 [Before Friday](#before-friday) — this is the remaining risk, and it is
 not something that could be checked from here.
 
-## 1. Firebase — done
+## Stack
 
-The project `hide-and-seek-dc4ac` is wired into `js/firebase-config.js`.
-Nothing more to do there.
+Cloudflare Workers, with one **Durable Object per game** (`src/server.js`)
+built on the Agents SDK. The Worker serves the front end too, so there is
+one thing to deploy and no separate static host.
 
-The one remaining step, if it hasn't been done: **Build → Firestore
-Database → Create database → test mode**. Registering the web app does not
-create the database, and without it every read and write fails.
+Firebase and Netlify are gone. The game logic still runs in each player's
+browser — the Durable Object is a shared, authoritative document store with
+a push channel, which is all Firestore was doing here.
 
-## 2. Test locally
+## 1. Run it locally
 
 ```
-npx serve .
+npm install
+npx wrangler dev
 ```
 
-Open the printed URL on your phone (same wifi as your laptop), or open it
-in a desktop browser for a first pass.
+Serves the whole app, Durable Object included, on http://localhost:8787.
+Open that on your phone (same wifi as your laptop) or in a desktop browser.
 
 ### Playing offline, on one machine
 
-`?mock=1` swaps Firestore for an in-memory stand-in (`js/devmode.js`) that
-shares state between **tabs of the same browser** — a whole game walked
-through by yourself, without touching the live project. Serve the folder,
-then open one tab per player:
+`?mock=1` swaps the Worker for a localStorage store (`js/store-local.js`)
+shared between **tabs of the same browser** — a whole game walked through
+by yourself with no server running at all. Open one tab per player:
 
 ```
-http://localhost:3000/?mock=1&pid=p0&sim=51.5074,-0.1278     <- host
-http://localhost:3000/?mock=1&pid=p1&sim=51.5077,-0.1275
-http://localhost:3000/?mock=1&pid=p2&sim=51.5071,-0.1281
+http://localhost:8787/?mock=1&pid=p0&sim=51.5074,-0.1278     <- host
+http://localhost:8787/?mock=1&pid=p1&sim=51.5077,-0.1275
+http://localhost:8787/?mock=1&pid=p2&sim=51.5071,-0.1281
 ```
 
 - `?pid=` gives each tab its own player identity. **Without it every tab
@@ -68,39 +69,45 @@ lobby map, others join with the code, host assigns roles and starts.
 **Set the head start to 0 in the lobby** or seekers will sit still for
 several minutes before they're released.
 
-Drop `?mock=1` and the same tabs talk to the real Firestore project, which
-is how you check two actual phones can see each other.
+Drop `?mock=1` and the same tabs talk to the real Durable Object, which is
+how you check two actual phones can see each other.
 
-### Quota check
+### Traffic check
 
 ```
-node test/quota.mjs
+node test/quota.mjs                                  # offline store
+BASE_URL=http://localhost:8787 node test/quota.mjs   # real Worker
 ```
 
-Walks five simulated players for a minute, counts Firestore writes and
-projects them onto a 90-minute game. Worth re-running after any change to
-how often the client writes — see [Staying inside the free
-tier](#staying-inside-the-free-tier).
+Walks five simulated players for a minute and projects the traffic onto a
+90-minute game. Currently ~5,400 writes and **5.2 MB down per phone** —
+which matters because those phones are on mobile data. Deltas are what keep
+it there; broadcasting whole game state instead would multiply it.
 
 ### Automated check
 
 ```
 npm i -D playwright && npx playwright install chromium
-node test/e2e.mjs
+node test/e2e.mjs                                    # offline store
+BASE_URL=http://localhost:8787 node test/e2e.mjs     # real Durable Object
 ```
 
-Runs against the offline stand-in, so it never writes to the live project.
-Drives a full five-player game and asserts 71 rules from the design doc:
+Run it both ways — the second is the one that proves the real backend works.
+Drives a full five-player game and asserts 72 rules from the design doc:
 ping cadence and uncertainty growth, every power's effect as seen from the
 *other* player's client, totem scaling and sabotage accrual/decay, hunt
-bearings, snitch fidelity bands, boundary breach, capture, scoring. Worth
-re-running after any change to `js/config.js`.
+bearings, snitch fidelity bands, boundary breach, capture, scoring, and
+that two concurrent transactions can't lose an update. Worth re-running
+after any change to `public/js/config.js`.
 
-## 3. Deploy (GitHub + Netlify)
+## 2. Deploy
 
-Push, then in Netlify: **Add new site → Import from Git**, pick the repo,
-leave build command blank, publish directory `/`. Netlify gives you a live
-URL — that's what everyone opens on Friday. Redeploys on every push.
+```
+npx wrangler deploy
+```
+
+One command puts the Worker, the Durable Object and the front end live, and
+prints the URL everyone opens. `wrangler login` first if you haven't.
 
 ## Running a game
 
@@ -119,7 +126,7 @@ URL — that's what everyone opens on Friday. Redeploys on every push.
 
 ## Where the numbers live
 
-`js/config.js` is the single source of truth, ported from design doc
+`public/js/config.js` is the single source of truth, ported from design doc
 Section 18. Every tunable value is there — nothing is hardcoded in the
 game logic. That file is the lever for post-playtest rebalancing.
 
@@ -173,49 +180,56 @@ outdoors, on real phones, before the real game:
 - [ ] One power activated and checked on the *other* player's screen
 - [ ] A totem sabotage with two people actually standing at it — this is
       the one that depends on real GPS precision, and if 10m proves too
-      tight in practice, raise `baseAccuracyRadiusM` in `js/config.js`
+      tight in practice, raise `baseAccuracyRadiusM` in `public/js/config.js`
       (it widens the sabotage ring with it)
 
-## Staying inside the free tier
+## What the port to Cloudflare changed
 
-Firestore's free Spark plan allows 20,000 writes and 50,000 reads a day.
-That sounds like plenty and is not: the first version wrote a player's
-position on every GPS fix, roughly once a second each, which measured at
-**~88,000 writes for a single 90-minute five-player game**. It would have
-stopped working about twenty minutes in, mid-game, on a Friday evening.
+The backend was Firestore until the day before the game. The move was worth
+recording because most of it was *not* a rewrite:
 
-Position writes are now throttled on movement (`CONFIG.sync`): write at
-most every 5s, and only if the player has actually moved 5m, with a
-keepalive every 30s regardless. This is self-correcting rather than a
-straight sample-rate cut — a position only goes stale while someone is
-standing still, and a stationary player's last position is still correct.
-A seeker's continuous broadcast now rides along in the same write instead
-of costing a second one.
+- **The game logic did not move.** It still runs in each player's browser.
+  `app.js`, `powers.js`, `world.js` and `hunt.js` are untouched by the port
+  beyond two lines. What changed is what `db` is.
+- **The store API stayed.** `js/store-core.js` keeps the
+  collections/documents/listeners shape the game was written against. That
+  shape was never Firebase-specific — it is "documents with listeners",
+  which is exactly what a Durable Object can be.
+- **Firestore's transactions had no equivalent**, so they were replaced with
+  optimistic concurrency: a transaction records the version of every
+  document it read, and the Durable Object refuses the write if any of them
+  moved. Because a Durable Object handles one message at a time, that check
+  is genuinely atomic. This is what stops two hiders' clients each crediting
+  the same second of sabotage progress, and the suite asserts it directly
+  (and was checked by breaking it on purpose to confirm the test fails).
+- **Deltas, not whole-state sync.** The Agents SDK will sync a whole state
+  object for you, which would have meant re-sending the entire game on every
+  position update. The Agent broadcasts only changed documents instead —
+  5.2 MB per phone per game rather than a multiple of it.
+- **`docops.js` is shared verbatim** between the Durable Object and the
+  offline store, so the offline tests can't pass while the real backend
+  misbehaves.
 
-That brings a full game to roughly **5,100 writes and an estimated 25,000
-reads** — inside the free tier with room to spare. `node test/quota.mjs`
-measures it.
-
-If you ever do go over, the fix is to enable the Blaze (pay-as-you-go)
-plan: at these volumes the bill is a few pence, and it removes the cliff
-where the game simply stops mid-round.
+Firestore's write quota — which the previous version had to be tuned hard to
+stay under — simply doesn't apply here. The position-write throttling in
+`CONFIG.sync` was kept anyway: it costs nothing and it is still less traffic
+over someone's mobile data.
 
 ## Security note
 
-The Firebase config in `js/firebase-config.js` is not a secret — it
-identifies the project and is designed to sit in the browser where anyone
-can read it. It is in the deployed page whether or not the repo is public,
-so hiding the repo would not hide it.
+There are no credentials in this repo any more — the Worker is addressed by
+its own URL and there is no API key to leak. That is a real improvement over
+the Firebase setup, where a public config plus test-mode rules meant anyone
+who found the repo could read and write the database.
 
-What actually guards the data is Firestore security rules, and in test
-mode there are none: anyone who has that config can read and write any
-document. Since this repo is public, that means anyone who finds it, not
-just anyone with the game link. For a one-evening game among five friends
-the worst case is someone vandalising a game in progress, which is why the
-build brief traded it away deliberately.
+What remains is that the Durable Object trusts its clients. Any rule can be
+bypassed by someone editing game state from dev tools, including seeing
+hiders they shouldn't — the build brief traded anti-cheat away deliberately,
+and the port kept that trade. Anyone who knows a game code can join it.
 
-Worth doing after Friday: delete the Firebase project, or write real rules.
-Test mode also expires on its own after 30 days.
+Worth knowing: the server *could* now enforce rules, because for the first
+time there is a server. If this game gets played more than once, moving the
+authoritative checks into `src/server.js` is the obvious next step.
 
 ## Known limitations of this build
 

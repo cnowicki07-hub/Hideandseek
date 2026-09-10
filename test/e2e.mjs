@@ -6,7 +6,11 @@ import path from 'path';
 // Drives a full five-player game against the offline dev harness and checks
 // the rules in the design doc actually hold. Run with:  node test/e2e.mjs
 // Needs Playwright:  npm i -D playwright && npx playwright install chromium
-const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
+const ROOT = path.join(path.resolve(new URL('..', import.meta.url).pathname), 'public');
+// BASE_URL points the run at a real Worker (npx wrangler dev). Without it the
+// suite serves public/ itself and uses the offline store, so it can run with
+// no server at all.
+const BASE_URL = process.env.BASE_URL || null;
 const PORT = 8123;
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 
@@ -17,7 +21,10 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'text/plain' });
   res.end(fs.readFileSync(file));
 });
-await new Promise((r) => server.listen(PORT, r));
+if (!BASE_URL) await new Promise((r) => server.listen(PORT, r));
+const ORIGIN = BASE_URL || `http://localhost:${PORT}`;
+const STORE_PARAM = BASE_URL ? '' : 'mock=1&';
+console.log(`running against ${ORIGIN}${BASE_URL ? ' (real Worker)' : ' (offline store)'}\n`);
 
 // Play area: a ~600m square in a park, so M ≈ 600.
 const BASE = { lat: 51.5074, lng: -0.1278 };
@@ -29,6 +36,11 @@ const BOUNDARY = [off(-300, -300), off(300, -300), off(300, 300), off(-300, 300)
 
 const results = [];
 const errors = [];
+const skipped = [];
+function skip(name, why) {
+  skipped.push({ name, why });
+  console.log(`SKIP  ${name}  — ${why}`);
+}
 
 // Poll until a condition holds rather than sleeping a fixed amount: state
 // crosses tabs asynchronously and fixed waits make these checks flaky.
@@ -64,7 +76,7 @@ async function openPlayer(i, start) {
   // mock=1 pins the suite to the offline harness. Without it, now that real
   // credentials are in firebase-config.js, every run would write test games
   // into the live Firestore project.
-  await p.goto(`http://localhost:${PORT}/?mock=1&pid=p${i}&sim=${start.lat},${start.lng}`);
+  await p.goto(`${ORIGIN}/?${STORE_PARAM}pid=p${i}&sim=${start.lat},${start.lng}`);
   pages.push(p);
   return p;
 }
@@ -463,6 +475,42 @@ await until(host, () => Object.values(totemsState)[0].status === 'destroyed', nu
 const destroyed = await host.evaluate(() => Object.values(totemsState)[0].status);
 check('sabotage completes and destroys the totem', destroyed === 'destroyed', destroyed);
 
+// ---- optimistic concurrency (replaces Firestore's transactions) ----
+// Without version checking, two clients reading the same value and both
+// writing back would lose one increment — which in the real game means two
+// hiders' clients each crediting the same second of sabotage progress.
+await host.evaluate(() => gameRef().collection('racetest').doc('r1').set({ n: 0 }));
+await host.waitForTimeout(600);
+
+const bump = (page) => page.evaluate(async () => {
+  const ref = gameRef().collection('racetest').doc('r1');
+  try {
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      // Widen the window so both clients genuinely overlap.
+      await new Promise((r) => setTimeout(r, 150));
+      tx.update(ref, { n: (snap.data().n || 0) + 1 });
+    });
+    return 'ok';
+  } catch (e) { return 'failed: ' + e.message; }
+});
+
+if (BASE_URL) {
+  const raceOutcomes = await Promise.all([bump(pages[2]), bump(pages[3])]);
+  await host.waitForTimeout(800);
+  const raceTotal = await host.evaluate(async () =>
+    (await gameRef().collection('racetest').doc('r1').get()).data().n);
+  check('concurrent transactions do not lose an update',
+    raceTotal === 2 && raceOutcomes.every((r) => r === 'ok'),
+    `n=${raceTotal} after two concurrent increments (${raceOutcomes.join(', ')})`);
+} else {
+  // The offline store is localStorage, which gives no atomicity across
+  // browser processes, so two tabs can both win a race there. Only the
+  // Durable Object can actually provide this, so only it is asserted on.
+  skip('concurrent transactions do not lose an update',
+    'needs the real Worker (BASE_URL=...); localStorage has no cross-process atomicity');
+}
+
 // ================= TIER 4 / hunt + snitch =================
 
 await host.evaluate(() => gameRef().update({ lastCaptureAt: Date.now() - 11 * 60000 }));
@@ -643,7 +691,8 @@ check('outcomes are labelled in plain language',
 // ---- results ----
 console.log('\n' + '='.repeat(60));
 const failed = results.filter((r) => !r.pass);
-console.log(`${results.length - failed.length}/${results.length} checks passed`);
+console.log(`${results.length - failed.length}/${results.length} checks passed` +
+  (skipped.length ? `, ${skipped.length} skipped` : ''));
 if (failed.length) console.log('FAILED:\n' + failed.map((f) => '  - ' + f.name + (f.detail ? ` (${f.detail})` : '')).join('\n'));
 
 const realErrors = errors.filter((e) => !/favicon|tile\.openstreetmap|ERR_|Failed to load resource/i.test(e));
@@ -655,5 +704,5 @@ if (realErrors.length) {
 }
 
 await browser.close();
-server.close();
+if (!BASE_URL) server.close();
 process.exit(failed.length || realErrors.length ? 1 : 0);

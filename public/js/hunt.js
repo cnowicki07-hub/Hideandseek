@@ -104,7 +104,7 @@ function tickHunt(p, now) {
   const stale = Object.entries(p.huntedBy || {}).filter(([, m]) => now >= m.expiresAt);
   if (stale.length) {
     const update = {};
-    stale.forEach(([sid]) => { update['huntedBy.' + sid] = firebase.firestore.FieldValue.delete(); });
+    stale.forEach(([sid]) => { update['huntedBy.' + sid] = FieldValue.delete(); });
     playerRef().update(update).catch(() => {});
   }
 }

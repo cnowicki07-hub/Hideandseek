@@ -57,11 +57,13 @@ el('btn-host').onclick = async () => {
   currentPlayerName = el('input-name-host').value.trim() || 'Host';
   const sideM = parseFloat(el('input-area-side').value) || 400;
   const lengthMin = parseFloat(el('input-length').value) || 90;
-  await hostCreateGame({
-    areaM2: sideM * sideM,
-    gameLengthMin: lengthMin,
-    endConditionMode: el('input-end-mode').value,
-  });
+  try {
+    await hostCreateGame({
+      areaM2: sideM * sideM,
+      gameLengthMin: lengthMin,
+      endConditionMode: el('input-end-mode').value,
+    });
+  } catch (e) { storeConnectionFailed(e); return; }
   el('lobby-code').textContent = gameCode;
   el('host-controls').style.display = 'block';
   showView('view-lobby');
@@ -73,7 +75,9 @@ el('btn-join').onclick = async () => {
   currentPlayerName = el('input-name-join').value.trim() || 'Player';
   const code = el('input-code').value.trim();
   if (!code) { alert('Enter a game code.'); return; }
-  const ok = await joinGame(code, currentPlayerName, false);
+  let ok;
+  try { ok = await joinGame(code, currentPlayerName, false); }
+  catch (e) { storeConnectionFailed(e); return; }
   if (ok) {
     el('lobby-code').textContent = gameCode;
     showView('view-lobby');

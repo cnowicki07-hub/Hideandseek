@@ -63,6 +63,9 @@ function me() { return playersState[playerId]; }
 
 async function hostCreateGame(opts) {
   gameCode = newGameCode();
+  // Each game is its own Durable Object, so the store can't be opened until
+  // there is a code to address.
+  await initStore(gameCode);
   const boundary = opts.boundary || null;
   const areaM2 = boundary ? polygonAreaM2(boundary) : opts.areaM2;
   M = computeM(areaM2);
@@ -82,7 +85,7 @@ async function hostCreateGame(opts) {
     gameLengthMin: lengthMin,
     endConditionMode: opts.endConditionMode || CONFIG.endConditionMode,
     headstartMs: opts.headstartMs != null ? opts.headstartMs : headstartMs,
-    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
     lastCaptureAt: null, // drives the global Hunt no-capture timer
     pausedAt: null,
     pausedTotalMs: 0,
@@ -95,6 +98,7 @@ async function hostCreateGame(opts) {
 async function joinGame(code, name, isHost) {
   gameCode = code.toUpperCase();
   playerId = newPlayerId();
+  await initStore(gameCode);
   const gameSnap = await gameRef().get();
   if (!gameSnap.exists) { alert('Game code not found.'); return false; }
   const gameData = gameSnap.data();

@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hide-and-seek",
+  "main": "src/server.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The front end is served straight from the same Worker, so a deploy is
+  // one command and there is no separate static host to keep in step.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "GameAgent", "class_name": "GameAgent" }
+    ]
+  },
+
+  // SQLite-backed Durable Objects — this is what the Agent's this.sql uses.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["GameAgent"] }
+  ],
+
+  "observability": {
+    "enabled": true
+  }
+}
