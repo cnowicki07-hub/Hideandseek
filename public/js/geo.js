@@ -138,7 +138,7 @@ function squareBoundaryAround(centre, sideM) {
   ];
 }
 
-// Vertices of a pie wedge, for rendering a Smear arc.
+// Vertices of a pie wedge — the Probe's sweep and the Hunt's error cone.
 function arcPolygon(center, bearing, halfWidthDeg, radiusM, steps) {
   const pts = [[center.lat, center.lng]];
   const n = steps || 16;
@@ -150,10 +150,9 @@ function arcPolygon(center, bearing, halfWidthDeg, radiusM, steps) {
   return pts;
 }
 
-// Random point-in-circle, used for totem anonymous pings and hider
-// uncertainty display when we want a random point rather than a
-// drawn circle (Leaflet draws the circle directly from radius, so
-// this is mainly for totem pings which report a specific point).
+// Uniform random point inside a circle. Every inaccurate reading in the
+// game is built on this: the 30m error on a ping, the snitch's range bands,
+// and a totem's anonymous report.
 function randomPointInRadius(center, radiusM) {
   const r = radiusM * Math.sqrt(Math.random());
   const theta = Math.random() * 2 * Math.PI;

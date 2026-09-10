@@ -1,6 +1,6 @@
-// Core engine: host/join, roles, position sync with phase-based ping
-// cadence and uncertainty growth, charge economy, capture, elimination,
-// and the local rules tick.
+// Core engine: host/join, roles, true-position sync, the ping economy
+// (nothing shows on a map until someone spends charge on it), capture,
+// elimination, and the local rules tick.
 //
 // There is no server, so each client is responsible for enforcing rules
 // against *itself* (design brief Section 1: no anti-cheat). Effects other
@@ -22,7 +22,6 @@ let gameState = null;
 let playersState = {};
 let totemsState = {};
 let tripwiresState = {};
-let cordonsState = {};
 let signpostsState = {};
 
 let myPos = null;              // latest real GPS fix for this device
@@ -129,22 +128,11 @@ async function joinGame(code, name, isHost) {
       cooldownUntil: 0,
       activePower: null,
       activePowerExpiresAt: 0,
-      pendingPingMod: null,
       realLat: null, realLng: null, realUpdatedAt: null,
-      broadcastLat: null, broadcastLng: null,
-      broadcastRadiusM: CONFIG.baseAccuracyRadiusM,
-      broadcastAt: null,
-      broadcastMode: 'circle',
-      broadcastArc: null,
-      pingHistory: [],
-      falseTrailUntil: 0, falseTrailBearing: null,
-      silentRunUntil: 0,
+      pings: [],
+      goQuietUntil: 0,
       decoy: null,
-      darkUntil: 0,
-      forcedBroadcastUntil: 0,
       lockedOutUntil: 0,
-      beaconedUntil: 0,
-      undeployedTotems: 0,
       huntedBy: {},
       activeHunt: null,
       snitchUsedAt: 0,
@@ -286,190 +274,105 @@ function onPosition(pos) {
   if (!p || p.status !== 'active') return;
   if (isPaused()) return;
 
+  // True position is synced so the physical rules (tripwires, sabotage,
+  // capture range, boundary, probe geometry) have something to work with. It
+  // is never displayed to anyone — only paid-for pings are.
   if (shouldWritePosition(here, now)) {
-    const update = { realLat: here.lat, realLng: here.lng, realUpdatedAt: now, lastContactAt: now };
-    // A seeker's broadcast rides along in the same write rather than costing
-    // a second one.
-    if (playerRole === 'seeker') Object.assign(update, seekerBroadcastFields(here, now, p));
-    playerRef().update(update);
+    playerRef().update({
+      realLat: here.lat, realLng: here.lng, realUpdatedAt: now, lastContactAt: now,
+    });
     lastPositionWrite = { lat: here.lat, lng: here.lng, at: now };
   }
-
-  if (playerRole === 'hider' && isPlaying()) maybeSendHiderPing(here, now, p);
 }
 
-// Seekers broadcast continuously at full accuracy, unless Go Dark is active
-// (and Uncloak can force them back — design doc 5.1/5.3).
-function seekerBroadcastFields(here, now, p) {
-  if (isSeekerDark(p, now)) {
-    if (p.broadcastLat === null) return {};
-    return { broadcastLat: null, broadcastLng: null, broadcastAt: now };
-  }
-  return {
-    broadcastLat: here.lat, broadcastLng: here.lng,
-    broadcastRadiusM: 0, broadcastAt: now, broadcastMode: 'circle',
-  };
+// ---------- Pings ----------
+//
+// Nothing reports its position automatically. Every dot on the map was paid
+// for by somebody spending charge, which makes each one worth reading.
+//
+// A ping is stored on the player it describes, as a short list of dots. The
+// stored coordinates are already the *displayed* ones — jitter is applied
+// once, here, and never recomputed. The true position stays in realLat /
+// realLng and is what every physical rule uses.
+
+// Displace a reported position by up to jitterRadiusM, uniformly over the
+// disc. This is why a player who has not moved can appear to wander, and why
+// the trail drawn between their dots can point somewhere they never went.
+function jitterPoint(point) {
+  const r = CONFIG.ping.jitterRadiusM;
+  if (!r) return { lat: point.lat, lng: point.lng };
+  return randomPointInRadius(point, r);
 }
 
-function updateSeekerBroadcast(here, now, p) {
-  const fields = seekerBroadcastFields(here, now, p);
-  if (!Object.keys(fields).length) return;
-  playerRef().update(fields);
-}
-
-function isSeekerDark(p, now) {
-  now = now || Date.now();
-  if (!p) return false;
-  if (p.forcedBroadcastUntil && now < p.forcedBroadcastUntil) return false;
-  return !!(p.darkUntil && now < p.darkUntil);
-}
-
-// Movement state + phase-based ping cadence, per design doc Section 4.
-let nextPingDueAt = 0;
-
-function currentPhase() {
-  if (!gameStartAt || !gameLengthMs) return 1;
-  const elapsedPct = (elapsedGameMs() / gameLengthMs) * 100;
-  if (elapsedPct < CONFIG.ping.phase1EndPct) return 1;
-  if (elapsedPct < CONFIG.ping.phase2EndPct) return 2;
-  return 3;
-}
-
-function pingInterval(phase, moving) {
-  const c = CONFIG.ping;
-  if (phase === 1) return moving ? c.phase1MovingMs : c.phase1StationaryMs;
-  if (phase === 2) return moving ? c.phase2MovingMs : c.phase2StationaryMs;
-  return moving ? c.phase3MovingMs : c.phase3StationaryMs;
-}
-
-function isMovingNow() {
-  if (recentFixes.length < 2) return false;
-  const a = recentFixes[0];
-  const b = recentFixes[recentFixes.length - 1];
-  const dtMin = (b.at - a.at) / 60000;
-  if (dtMin <= 0) return false;
-  return distanceM(a, b) / dtMin > CONFIG.ping.movingThresholdMPerMin;
-}
-
-function maybeSendHiderPing(here, now, p) {
-  // A hider inside an active cordon pings continuously — that is the cordon's
-  // penalty for being caught inside it (design doc 5.3).
-  if (isInsideActiveCordon(here, now)) {
-    sendHiderPing(here, now, p, { forceExact: true });
-    nextPingDueAt = now + CONFIG.sync.minWriteIntervalMs;
-    return;
-  }
-  // Boundary breach forces full exposure for the countdown (design doc 11).
-  if (p.breachStartedAt) {
-    sendHiderPing(here, now, p, { forceExact: true });
-    nextPingDueAt = now + CONFIG.sync.minWriteIntervalMs;
-    return;
-  }
-  // A beaconed hider is lit up continuously at exact position.
-  if (p.beaconedUntil && now < p.beaconedUntil) {
-    sendHiderPing(here, now, p, { forceExact: true });
-    nextPingDueAt = now + CONFIG.sync.minWriteIntervalMs;
-    return;
-  }
-
-  if (!lastRealPing) {
-    sendHiderPing(here, now, p);
-    return;
-  }
-  if (now < nextPingDueAt) return;
-  sendHiderPing(here, now, p);
-}
-
-// The single interception point for every power that changes what a hider
-// broadcasts: Go Quiet, Smear, Decoy, Silent Run.
-function sendHiderPing(here, now, p, opts) {
+// `exact` skips the jitter — tripwires, totems and revealed seekers all
+// report the truth.
+async function emitPing(targetId, position, opts) {
   opts = opts || {};
-  // Silent Run keeps the stationary cadence even while moving.
-  const silentRun = !!(p.silentRunUntil && now < p.silentRunUntil);
-  const moving = opts.forceExact ? true : (isMovingNow() && !silentRun);
-  const phase = currentPhase();
-  const scheduleNext = () => { nextPingDueAt = now + pingInterval(phase, moving); };
+  const target = playersState[targetId];
+  if (!target || target.status !== 'active') return false;
 
-  if (!opts.forceExact && p.pendingPingMod === 'go_quiet') {
-    // Skip this ping entirely. broadcastAt is deliberately left stale so the
-    // seeker's circle keeps growing — indistinguishable from signal loss.
-    playerRef().update({ pendingPingMod: null, activePower: null });
-    scheduleNext();
-    return;
+  const now = Date.now();
+
+  // Go Quiet eats the next ping aimed at you and is spent doing it.
+  if (!opts.ignoreCounters && target.goQuietUntil && now < target.goQuietUntil) {
+    await playerRef(targetId).update({ goQuietUntil: 0, activePower: null, activePowerExpiresAt: 0 });
+    await pushEvent({ type: 'go_quiet_used', to: targetId });
+    return false;
   }
 
-  const history = (p.pingHistory || []).concat([{ lat: here.lat, lng: here.lng, at: now }])
-    .slice(-CONFIG.ping.historyLength);
-
-  const update = {
-    broadcastAt: now,
-    broadcastRadiusM: CONFIG.baseAccuracyRadiusM,
-    pingHistory: history,
-  };
-
-  const decoyActive = !opts.forceExact && p.decoy && now < p.decoy.expiresAt;
-
-  if (!opts.forceExact && p.pendingPingMod === 'smear') {
-    // Report a wide directional arc instead of a circle, for this ping only.
-    const bearing = travelBearing(p) != null ? travelBearing(p) : Math.random() * 360;
-    update.broadcastMode = 'arc';
-    update.broadcastLat = here.lat;
-    update.broadcastLng = here.lng;
-    update.broadcastArc = {
-      bearing,
-      halfWidthDeg: CONFIG.hiderPowers.smear.arcHalfWidthDeg,
-      radiusM: Math.max(CONFIG.baseAccuracyRadiusM * 8, 0.06 * M),
-    };
-    update.pendingPingMod = null;
-    update.activePower = null;
-  } else if (decoyActive) {
-    // Fake marker walks the chosen bearing at a plausible pace; the real
-    // position is not broadcast at all while the decoy runs.
-    const paceMPerMs = (CONFIG.hiderPowers.decoy.paceKmh * 1000) / 3600000;
-    const travelled = (now - p.decoy.startedAt) * paceMPerMs;
-    const fake = destinationPoint({ lat: p.decoy.originLat, lng: p.decoy.originLng }, p.decoy.bearing, travelled);
-    update.broadcastMode = 'circle';
-    update.broadcastLat = fake.lat;
-    update.broadcastLng = fake.lng;
-  } else {
-    update.broadcastMode = 'circle';
-    update.broadcastLat = here.lat;
-    update.broadcastLng = here.lng;
+  // A decoy takes the hit instead, so the dot lands where the decoy is.
+  let point = position;
+  if (!opts.ignoreCounters && target.decoy && now < target.decoy.expiresAt) {
+    point = decoyPositionAt(target.decoy, now);
   }
 
-  playerRef().update(update);
-  lastRealPing = { ...here, at: now };
-  scheduleNext();
+  const shown = opts.exact ? { lat: point.lat, lng: point.lng } : jitterPoint(point);
+  const pings = (target.pings || [])
+    .concat([{ lat: shown.lat, lng: shown.lng, at: now, exact: !!opts.exact }])
+    .slice(-CONFIG.ping.maxStored);
+
+  await playerRef(targetId).update({ pings });
+  if (opts.notify !== false) await pushEvent({ type: 'pinged', to: targetId });
+  return true;
 }
 
-// Direction of travel from the last two real pings, or null if unknown.
-// False Trail replaces this for Backtrace purposes only.
-function travelBearing(p) {
-  const h = p.pingHistory || [];
-  if (h.length < 2) return null;
-  return bearingDeg(h[h.length - 2], h[h.length - 1]);
+// Where a decoy has walked to by `now` — it leaves from where you cast it and
+// keeps going on the bearing you chose, at a walking pace, until it expires.
+function decoyPositionAt(decoy, now) {
+  const paceMPerMs = (CONFIG.hiderPowers.decoy.paceKmh * 1000) / 3600000;
+  const travelled = ((now || Date.now()) - decoy.startedAt) * paceMPerMs;
+  return destinationPoint(
+    { lat: decoy.originLat, lng: decoy.originLng }, decoy.bearing, travelled);
 }
 
-function backtraceBearing(p, now) {
+function livePings(p, now) {
   now = now || Date.now();
-  if (p.falseTrailUntil && now < p.falseTrailUntil && p.falseTrailBearing != null) {
-    return p.falseTrailBearing;
-  }
-  return travelBearing(p);
+  return (p.pings || []).filter((d) => now - d.at < CONFIG.ping.lifetimeMs);
 }
 
-// The radius a hider's circle should be *drawn* at right now: base accuracy
-// plus growth since the last ping, capped at 0.5M (design doc Section 4).
-// Growth happens at render time, not at ping time — that is what makes
-// staying still expensive and Go Quiet indistinguishable from signal loss.
-function displayRadiusM(p, now) {
-  now = now || Date.now();
-  if (!p.broadcastAt) return CONFIG.baseAccuracyRadiusM;
-  const phase = currentPhase();
-  const rate = phase === 3 ? CONFIG.ping.growthRateMPerMinPhase3 : CONFIG.ping.growthRateMPerMinPhase12;
-  const mins = (now - p.broadcastAt) / 60000;
-  const cap = CONFIG.ping.uncertaintyCapFraction * M;
-  return Math.min(cap, (p.broadcastRadiusM || CONFIG.baseAccuracyRadiusM) + rate * mins);
+// White at birth, red by the halfway mark, then fading out entirely.
+function pingAppearance(dot, now) {
+  const age = (now || Date.now()) - dot.at;
+  const { lifetimeMs, fadeStartMs } = CONFIG.ping;
+  if (age >= lifetimeMs) return null;
+
+  if (age < fadeStartMs) {
+    const t = age / fadeStartMs;            // 0 = white, 1 = red
+    const g = Math.round(255 * (1 - t));
+    const b = Math.round(255 * (1 - t));
+    return { color: `rgb(255,${g},${b})`, opacity: 1 };
+  }
+  const t = (age - fadeStartMs) / (lifetimeMs - fadeStartMs);
+  return { color: 'rgb(255,0,0)', opacity: 1 - t };
+}
+
+// Breaching the boundary reports you continuously until you are back inside.
+let lastBreachPingAt = 0;
+function tickBreachExposure(p, now) {
+  if (!p.breachStartedAt || !myPos) return;
+  if (now - lastBreachPingAt < CONFIG.sync.minWriteIntervalMs) return;
+  lastBreachPingAt = now;
+  emitPing(playerId, myPos, { ignoreCounters: true, notify: false });
 }
 
 // ---------- Capture ----------
@@ -498,20 +401,16 @@ async function confirmCapture(targetId) {
     graceUntil: now + CONFIG.charge.conversionGraceMs,
     chargeCheckpoint: CONFIG.charge.conversionStartingCharge,
     chargeCheckpointAt: now,
-    broadcastRadiusM: 0,
-    broadcastMode: 'circle',
+    pings: [],
     survivalMs: survivalMsFor(target, now),
     // A converted hider drops every hider-side state.
     huntedBy: {},
     declaredHiddenAt: null,
     activePower: null,
     activePowerExpiresAt: 0,
-    pendingPingMod: null,
     decoy: null,
-    beaconedUntil: 0,
+    goQuietUntil: 0,
     lockedOutUntil: 0,
-    silentRunUntil: 0,
-    undeployedTotems: 0,
   });
   await clearHuntsOn(targetId);
   await gameRef().update({ lastCaptureAt: now });
@@ -535,7 +434,6 @@ async function endPlayer(id, status) {
     status,
     endedAt: now,
     survivalMs: survivalMsFor(p, now),
-    broadcastLat: null, broadcastLng: null, broadcastAt: null,
     activePower: null, activePowerExpiresAt: 0, decoy: null, huntedBy: {},
   });
   await clearHuntsOn(id);
@@ -773,12 +671,6 @@ function subscribeToWorld() {
     tripwiresState = t;
     safely('world', renderWorld);
   });
-  gameRef().collection('cordons').onSnapshot((snap) => {
-    const c = {};
-    snap.forEach((d) => { c[d.id] = d.data(); });
-    cordonsState = c;
-    safely('world', renderWorld);
-  });
   gameRef().collection('signposts').onSnapshot((snap) => {
     const s = {};
     snap.forEach((d) => { s[d.id] = d.data(); });
@@ -843,22 +735,10 @@ function tick() {
 
   if (playerRole === 'hider' && myPos) {
     tickBoundary(p, now);
-    tickBeaconContagion(p, now);
     tickTripwires(p, now);
     tickTotems(p, now);
-    maybeSendHiderPing(myPos, now, p);
+    tickBreachExposure(p, now);
   }
-  if (playerRole === 'seeker' && myPos) {
-    // Only correct a mismatch — Go Dark starting or lapsing. Steady-state
-    // broadcasting rides on the position write.
-    const shouldBeDark = isSeekerDark(p, now);
-    const isBroadcasting = p.broadcastLat !== null;
-    if (shouldBeDark === isBroadcasting) {
-      updateSeekerBroadcast(myPos, now, p);
-      lastPositionWrite = { lat: myPos.lat, lng: myPos.lng, at: now };
-    }
-  }
-
   tickHunt(p, now);
   if (p.isHost) tickHostChecks(now);
 
@@ -867,28 +747,11 @@ function tick() {
 }
 
 function expireActivePower(p, now) {
-  if (p.activePower && p.activePowerExpiresAt && now >= p.activePowerExpiresAt && !p.pendingPingMod) {
+  if (p.activePower && p.activePowerExpiresAt && now >= p.activePowerExpiresAt) {
     playerRef().update({ activePower: null, activePowerExpiresAt: 0 }).catch(() => {});
   }
   if (p.decoy && now >= p.decoy.expiresAt) {
     playerRef().update({ decoy: null }).catch(() => {});
-  }
-}
-
-// A beaconed hider spreads the beacon to any hider coming within 30m
-// (design doc 5.3). Each hider's own client applies this to itself.
-function tickBeaconContagion(p, now) {
-  if (p.beaconedUntil && now < p.beaconedUntil) return;
-  const radius = CONFIG.seekerPowers.beacon.radiusM;
-  for (const [id, other] of Object.entries(playersState)) {
-    if (id === playerId || other.role !== 'hider' || other.status !== 'active') continue;
-    if (!(other.beaconedUntil && now < other.beaconedUntil)) continue;
-    if (!other.realLat) continue;
-    if (distanceM(myPos, { lat: other.realLat, lng: other.realLng }) <= radius) {
-      playerRef().update({ beaconedUntil: other.beaconedUntil }).catch(() => {});
-      toast('You have been lit up by a nearby beacon.');
-      return;
-    }
   }
 }
 
@@ -902,11 +765,9 @@ function tickTripwires(p, now) {
       triggered: true, triggeredAt: now,
       triggerLat: myPos.lat, triggerLng: myPos.lng,
     });
-    pushEvent({
-      type: 'tripwire',
-      to: tw.placedBy,
-      lat: myPos.lat, lng: myPos.lng,
-    });
+    // Exact, and it defeats Go Quiet and Decoy — you physically walked into it.
+    emitPing(playerId, myPos, { exact: true, ignoreCounters: true, notify: false });
+    pushEvent({ type: 'tripwire', to: tw.placedBy });
     toast('You tripped a tripwire.');
   });
 }

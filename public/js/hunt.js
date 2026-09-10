@@ -3,7 +3,7 @@
 // The Hunt is deliberately independent of the charge economy: it costs
 // nothing and is gated only by the global no-capture timer. Bearings are
 // computed on each party's own client from positions both already hold, and
-// are refreshed on a 30s cadence rather than continuously, so the information
+// are refreshed every 30s rather than continuously, so the information
 // stays as coarse as the design intends.
 
 function huntAvailableAt(now) {
@@ -131,15 +131,13 @@ function snitchSurvey(now) {
 
   Object.entries(playersState).forEach(([id, p]) => {
     if (id === playerId || p.role !== 'hider' || p.status !== 'active') return;
-    // Hiders who have gone quiet are excluded entirely.
-    if (p.pendingPingMod === 'go_quiet') return;
+    // Someone running Go Quiet cannot be sold out.
+    if (p.goQuietUntil && now < p.goQuietUntil) return;
 
     // A decoy user surveys as their decoy, not their real position.
     let pos;
     if (p.decoy && now < p.decoy.expiresAt) {
-      const paceMPerMs = (CONFIG.hiderPowers.decoy.paceKmh * 1000) / 3600000;
-      const travelled = (now - p.decoy.startedAt) * paceMPerMs;
-      pos = destinationPoint({ lat: p.decoy.originLat, lng: p.decoy.originLng }, p.decoy.bearing, travelled);
+      pos = decoyPositionAt(p.decoy, now);
     } else {
       if (!p.realLat) return;
       pos = { lat: p.realLat, lng: p.realLng };
@@ -152,7 +150,11 @@ function snitchSurvey(now) {
     else if (dist <= c.wideRangeM) radiusM = c.wideCircleM;
     else return; // beyond wide range: nothing
 
-    out.push({ id, name: p.name, lat: pos.lat, lng: pos.lng, radiusM, dist });
+    // The band is the error, not a circle to draw any more: someone far off
+    // surveys as a point that is wrong by up to the band's radius, so what
+    // you pass on about them is wrong by that much too.
+    const shown = radiusM ? randomPointInRadius(pos, radiusM) : pos;
+    out.push({ id, name: p.name, lat: shown.lat, lng: shown.lng, radiusM, dist });
   });
 
   return out.sort((a, b) => a.dist - b.dist);
@@ -186,10 +188,11 @@ async function snitchOn(targetId) {
   const marks = activeMarksOn(p, now);
   if (!marks.length) { toast('You are no longer being hunted.'); return; }
 
+  // Betrayal produces a real ping on the betrayed hider, so it lands in the
+  // trail like any other reading — and the hunters are told to look.
+  await emitPing(targetId, { lat: entry.lat, lng: entry.lng }, { notify: false });
   await Promise.all(marks.map((m) => pushEvent({
-    type: 'snitch_report',
-    to: m.seekerId,
-    lat: entry.lat, lng: entry.lng, radiusM: entry.radiusM, name: entry.name,
+    type: 'snitch_report', to: m.seekerId, name: entry.name,
   })));
 
   reveals.snitch = null;

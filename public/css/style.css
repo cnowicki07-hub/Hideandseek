@@ -345,6 +345,23 @@ button.danger {
 }
 .scoreboard li::marker { color: var(--blood); font-weight: 700; }
 
+/* ---------- scan glow ----------
+   Direction only. Deliberately soft and wide — it should be impossible to
+   read a precise bearing off it, only "that way, and there are three of them". */
+
+#scan-glow {
+  display: none; position: absolute; inset: 0;
+  pointer-events: none; z-index: 850;
+}
+.scan-wedge {
+  position: absolute; inset: -40%;
+  opacity: 0.5;
+  filter: blur(34px);
+  mix-blend-mode: screen;
+  -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 52%, #000 78%);
+  mask-image: radial-gradient(circle at 50% 50%, transparent 52%, #000 78%);
+}
+
 /* ---------- hiding phase ---------- */
 
 #hiding-bar {

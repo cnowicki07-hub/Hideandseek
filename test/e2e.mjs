@@ -170,21 +170,11 @@ await host.evaluate(async () => {
   const roles = { p0: 'seeker', p1: 'seeker', p2: 'hider', p3: 'hider', p4: 'hider' };
   await Promise.all(Object.entries(roles).map(([id, role]) => playerRef(id).update({ role })));
 });
-// Wait for each player to actually see their role before touching their
-// loadout — a human picks powers after being told what they are, and writing
-// both at once races in the offline store.
+// Wait for each player to actually see their role before going on.
 for (let i = 0; i < 5; i++) {
   await until(pages[i], () => !!(me() && me().role));
 }
-for (let i = 2; i < 5; i++) {
-  await pages[i].evaluate(() => playerRef().update({
-    loadout: ['go_quiet', 'smear', 'silent_run', 'decoy'],
-  }));
-  await until(host, ([id]) => {
-    const p = playersState[id];
-    return !!(p && p.role === 'hider' && (p.loadout || []).length >= 3);
-  }, ['p' + i]);
-}
+
 
 // Give hiding time a real duration — an earlier check set it to zero, which
 // would release the seekers the instant the game starts.
@@ -197,12 +187,10 @@ const startReady = await until(host,
   () => !document.getElementById('btn-start-game').disabled, null, 15000);
 const readyText = await host.evaluate(() => ({
   ready: document.getElementById('ready-status').textContent,
-  roles: document.getElementById('roles-status').textContent,
-  loadouts: Object.fromEntries(Object.entries(playersState)
-    .map(([k, v]) => [k, `${v.role || '-'}:${(v.loadout || []).length}`])),
+  roles: Object.fromEntries(Object.entries(playersState).map(([k, v]) => [k, v.role || '-'])),
 }));
-check('start unlocks once every role and loadout is settled', startReady === true,
-  `${readyText.ready} | ${JSON.stringify(readyText.loadouts)}`);
+check('start unlocks once every role is settled', startReady === true,
+  `${readyText.ready} | ${JSON.stringify(readyText.roles)}`);
 
 await host.click('#btn-start-game');
 for (const p of pages) await p.waitForSelector('#view-game.active', { timeout: 8000 });
@@ -236,262 +224,241 @@ check('seekers release early once every hider declares hidden',
 
 await host.waitForTimeout(3000);
 
-// ================= TIER 1 / positioning =================
+// ================= POSITIONING =================
+//
+// True positions still sync — the physical rules need them — but they are
+// never shown to anyone. Only paid-for pings appear.
 
-const hiderBroadcast = await host.evaluate(() => {
+const truthSynced = await host.evaluate(() => {
   const h = playersState.p2;
-  return { lat: h.broadcastLat, at: h.broadcastAt, r: h.broadcastRadiusM, mode: h.broadcastMode };
+  return h.realLat != null && h.realLng != null;
 });
-check('hider pings on join', hiderBroadcast.lat != null && hiderBroadcast.at != null);
-check('hider ping starts at base accuracy', hiderBroadcast.r === 10, `${hiderBroadcast.r}m`);
+check('true positions still sync for the physical rules', truthSynced === true);
 
-// Uncertainty must GROW with time since the ping, not be fixed at ping time.
-const growth = await host.evaluate(() => {
+const nothingShown = await host.evaluate(() =>
+  Object.values(playersState).every((p) => (p.pings || []).length === 0));
+check('but nothing is displayed until someone pays for it', nothingShown === true);
+
+const noLegacyFields = await host.evaluate(() => {
   const h = playersState.p2;
-  const now = h.broadcastAt;
-  return {
-    at0: displayRadiusM(h, now),
-    at2min: displayRadiusM(h, now + 120000),
-    cap: displayRadiusM(h, now + 60 * 60000),
-  };
+  return ['broadcastLat', 'broadcastRadiusM', 'broadcastMode', 'pingHistory']
+    .filter((k) => h[k] !== undefined);
 });
-check('uncertainty grows with time since ping',
-  growth.at0 === 10 && Math.abs(growth.at2min - 90) < 1,
-  `${growth.at0}m now, ${Math.round(growth.at2min)}m after 2min`);
-check('uncertainty capped at 0.5M', Math.abs(growth.cap - 300) < 6, `${Math.round(growth.cap)}m`);
+check('the old circle/uncertainty fields are gone',
+  noLegacyFields.length === 0, noLegacyFields.join(', ') || 'none');
 
-// Seekers broadcast exactly; hiders see nobody.
-const seekerView = await pages[1].evaluate(() => ({
-  broadcast: playersState.p1.broadcastRadiusM,
-  role: playerRole,
-}));
-check('seeker broadcasts at full accuracy', seekerView.broadcast === 0);
+// ================= POWERS =================
+//
+// Nothing pings on its own any more, so the first thing to prove is silence.
 
-// ================= TIER 2 / powers =================
-
-const outOfLoadout = await pages[2].evaluate(() => powerBlockedReason('uncloak', me()));
-check('powers outside your loadout are refused',
-  outOfLoadout === 'Not in your loadout.', outOfLoadout);
-
-// From here, reset the activating player each time: full charge, no cooldown,
-// no power occupying the single active slot, and the power in their loadout.
-// Those constraints are checked individually elsewhere.
 async function runPower(pageIdx, key, ctxArg) {
   return pages[pageIdx].evaluate(async ([k, c]) => {
-    const cur = me().loadout || [];
     await playerRef().update({
       cooldownUntil: 0, chargeCheckpoint: 100, chargeCheckpointAt: Date.now(),
-      activePower: null, activePowerExpiresAt: 0, pendingPingMod: null,
-      loadout: cur.includes(k) ? cur : cur.concat([k]),
+      activePower: null, activePowerExpiresAt: 0,
     });
     await new Promise((r) => setTimeout(r, 120));
     const ok = await activatePower(k, c);
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 300));
     return ok;
   }, [key, ctxArg || {}]);
 }
 
-// -- Go quiet: the next ping is skipped, broadcastAt goes stale --
-await runPower(2, 'go_quiet');
-// Sampled after arming: a routine ping between sampling and arming would
-// otherwise look like a failure.
-const beforeQuiet = await host.evaluate(() => playersState.p2.broadcastAt);
-await pages[2].evaluate(async () => {
-  nextPingDueAt = 0;
-  await new Promise((r) => setTimeout(r, 50));
-  sendHiderPing(myPos, Date.now(), me());
-});
-await host.waitForTimeout(400);
-const afterQuiet = await host.evaluate(() => ({
-  at: playersState.p2.broadcastAt, mod: playersState.p2.pendingPingMod,
-}));
-check('go quiet skips the ping (position goes stale)',
-  afterQuiet.at === beforeQuiet && afterQuiet.mod === null,
-  `broadcastAt ${beforeQuiet} -> ${afterQuiet.at} (delta ${afterQuiet.at - beforeQuiet}ms), mod ${afterQuiet.mod}`);
+const dotsOf = (pid) => host.evaluate(([id]) => (playersState[id].pings || []).length, [pid]);
 
-// -- Smear: next ping reports an arc --
-await runPower(2, 'smear');
-await pages[2].evaluate(async () => {
-  nextPingDueAt = 0;
-  sendHiderPing(myPos, Date.now(), me());
-});
-await host.waitForTimeout(400);
-const smeared = await host.evaluate(() => {
-  const h = playersState.p2;
-  return { mode: h.broadcastMode, arc: h.broadcastArc };
-});
-check('smear reports an arc instead of a circle',
-  smeared.mode === 'arc' && smeared.arc && smeared.arc.halfWidthDeg === 45);
+// -- silence by default --
+await host.waitForTimeout(4000);
+const idleDots = await host.evaluate(() =>
+  Object.values(playersState).reduce((n, p) => n + (p.pings || []).length, 0));
+check('nobody pings on their own', idleDots === 0, `${idleDots} dots without anyone spending`);
 
-// -- Decoy: broadcast follows a fake bearing, real position suppressed --
-await runPower(3, 'decoy', { bearing: 90 });
-await pages[3].evaluate(async () => {
-  await new Promise((r) => setTimeout(r, 1200));
-  nextPingDueAt = 0;
-  sendHiderPing(myPos, Date.now(), me());
-});
-await host.waitForTimeout(400);
-const decoyed = await host.evaluate(() => {
-  const h = playersState.p3;
-  return {
-    real: { lat: h.realLat, lng: h.realLng },
-    broadcast: { lat: h.broadcastLat, lng: h.broadcastLng },
-    drift: distanceM({ lat: h.realLat, lng: h.realLng }, { lat: h.broadcastLat, lng: h.broadcastLng }),
-    bearingOfDrift: bearingDeg({ lat: h.realLat, lng: h.realLng }, { lat: h.broadcastLat, lng: h.broadcastLng }),
-  };
-});
-check('decoy broadcasts a fake position, not the real one',
-  decoyed.drift > 0.5 && Math.abs(decoyed.bearingOfDrift - 90) < 15,
-  `${decoyed.drift.toFixed(1)}m east (bearing ${Math.round(decoyed.bearingOfDrift)}°)`);
+// -- Probe: a 180 degree sweep pings that half of the world and no more --
+await teleport(1, off(0, 0));        // seeker at the centre
+await teleport(2, off(0, 200));      // hider due north
+await teleport(3, off(0, -200));     // hider due south
+await runPower(1, 'probe', { point: off(0, 400) });   // sweep north
+await host.waitForTimeout(900);
+const northDots = await dotsOf('p2');
+const southDots = await dotsOf('p3');
+check('probe pings hiders in the swept half', northDots === 1, `${northDots} dot(s) on the northern hider`);
+check('probe leaves the other half alone', southDots === 0, `${southDots} dot(s) on the southern hider`);
 
-// -- Silent run: moving keeps the stationary cadence --
-await runPower(4, 'silent_run');
-const cadence = await pages[4].evaluate(() => {
-  const p = me();
-  recentFixes = [
-    { lat: myPos.lat, lng: myPos.lng, at: Date.now() - 60000 },
-    { lat: myPos.lat + 0.001, lng: myPos.lng, at: Date.now() },
-  ];
-  const movingNow = isMovingNow();
-  const silent = !!(p.silentRunUntil && Date.now() < p.silentRunUntil);
-  return {
-    movingNow, silent,
-    withSilent: pingInterval(1, movingNow && !silent),
-    withoutSilent: pingInterval(1, movingNow),
-  };
+// -- pings are fuzzy, and independently so --
+const offsets = await host.evaluate(() => {
+  const p = playersState.p2;
+  return (p.pings || []).map((d) =>
+    Math.round(distanceM({ lat: d.lat, lng: d.lng }, { lat: p.realLat, lng: p.realLng })));
 });
-check('silent run keeps the stationary cadence while moving',
-  cadence.movingNow && cadence.silent &&
-  cadence.withSilent === 300000 && cadence.withoutSilent === 120000,
-  `${cadence.withSilent / 1000}s vs ${cadence.withoutSilent / 1000}s`);
+check('reported positions are wrong by up to ~30m',
+  offsets.length === 1 && offsets[0] > 0 && offsets[0] <= 31, `${offsets[0]}m off true position`);
 
-// -- Scan: exact positions of hiders within 100m --
-await teleport(1, off(-100, 40));
-await host.waitForTimeout(1200);
+await runPower(1, 'probe', { point: off(0, 400) });
+await host.waitForTimeout(900);
+const drift = await host.evaluate(() => {
+  const d = playersState.p2.pings;
+  return Math.round(distanceM(d[d.length - 2], d[d.length - 1]));
+});
+check('a motionless player appears to move between pings', drift > 0,
+  `${drift}m of apparent movement while standing still`);
+
+// -- Scan: directions only, one per hider, never a position --
 await runPower(1, 'scan');
 const scan = await pages[1].evaluate(() => ({
-  n: reveals.scan.points.length,
-  names: reveals.scan.points.map((p) => p.name),
+  n: reveals.scan.bearings.length,
+  colours: new Set(reveals.scan.bearings.map((b) => b.color)).size,
+  hasPositions: reveals.scan.bearings.some((b) => b.lat !== undefined),
+  bearings: reveals.scan.bearings.map((b) => Math.round(b.bearing)),
 }));
-check('scan reveals only hiders within 100m', scan.n === 1 && scan.names[0] === 'Hide1',
-  `found ${scan.names.join(', ') || 'nobody'}`);
+check('scan reports one direction per hider, each its own colour',
+  scan.n === 3 && scan.colours === 3, `${scan.n} glows, ${scan.colours} colours`);
+check('scan never reveals a position', scan.hasPositions === false);
+check('scan bearings point the right way',
+  scan.bearings.some((b) => b < 5 || b > 355) && scan.bearings.some((b) => Math.abs(b - 180) < 5),
+  scan.bearings.join('°, ') + '°');
 
-// -- Probe: yes/no on a chosen circle --
-await runPower(1, 'probe', { point: off(120, -80) });
-const probeHit = await pages[1].evaluate(() => reveals.probe.hit);
-await runPower(1, 'probe', { point: off(290, 290) });
-const probeMiss = await pages[1].evaluate(() => reveals.probe.hit);
-check('probe answers yes where a hider is, no where none is', probeHit === true && probeMiss === false);
+const dotsAfterScan = await dotsOf('p3');
+check('scan does not ping anyone', dotsAfterScan === 0);
 
-// -- Backtrace vs False trail --
-await pages[2].evaluate(async () => {
-  await playerRef().update({
-    pingHistory: [{ lat: myPos.lat, lng: myPos.lng, at: Date.now() - 60000 },
-                  { lat: myPos.lat + 0.0009, lng: myPos.lng, at: Date.now() }],
-  });
+// -- Go quiet eats the next ping aimed at you --
+await runPower(3, 'go_quiet');
+await host.waitForTimeout(400);
+await runPower(1, 'probe', { point: off(0, -400) });   // sweep south, at p3
+await host.waitForTimeout(1000);
+const quietDots = await dotsOf('p3');
+const quietSpent = await host.evaluate(() => !playersState.p3.goQuietUntil);
+check('go quiet absorbs the ping aimed at you', quietDots === 0, `${quietDots} dot(s) got through`);
+check('go quiet is spent absorbing it', quietSpent === true);
+
+await runPower(1, 'probe', { point: off(0, -400) });
+await host.waitForTimeout(1000);
+check('the ping after that lands normally', (await dotsOf('p3')) === 1);
+
+// -- Decoy sends the ping somewhere you are not --
+// The decoy leaves from wherever you cast it, so cast it in one corner and
+// then walk a long way off: the seeker's wave has to report the corner.
+// A decoy walks at 3 km/h, so its own displacement over a few test seconds
+// is a metre or two — far below the 30m jitter — which is why the walk is
+// asserted separately, against the clock, rather than by waiting for it.
+const DECOY_CAST = off(-200, -150);
+const DECOY_TRUE = off(150, -150);
+await teleport(4, DECOY_CAST);
+await runPower(4, 'decoy', { bearing: 90 });
+await teleport(4, DECOY_TRUE);
+await runPower(1, 'probe', { point: off(0, -400) });
+await host.waitForTimeout(1000);
+const decoyed = await host.evaluate(([cast]) => {
+  const p = playersState.p4;
+  const dot = (p.pings || [])[p.pings.length - 1];
+  if (!dot) return null;
+  return {
+    fromTrue: Math.round(distanceM(dot, { lat: p.realLat, lng: p.realLng })),
+    fromCast: Math.round(distanceM(dot, cast)),
+  };
+}, [DECOY_CAST]);
+check('decoy makes the ping land where you are not',
+  decoyed && decoyed.fromTrue > 250,
+  decoyed ? `${decoyed.fromTrue}m from the real player` : 'no dot');
+check('the ping lands on the decoy instead',
+  decoyed && decoyed.fromCast <= 31,
+  decoyed ? `${decoyed.fromCast}m from where the decoy set off` : 'no dot');
+
+// And the decoy is walking, not standing: a minute on, it is a minute's walk
+// along the bearing that was picked.
+const decoyWalk = await pages[4].evaluate(() => {
+  const d = me().decoy;
+  const later = decoyPositionAt(d, d.startedAt + 60000);
+  return {
+    metres: Math.round(distanceM({ lat: d.originLat, lng: d.originLng }, later)),
+    bearing: Math.round(bearingDeg({ lat: d.originLat, lng: d.originLng }, later)),
+  };
 });
-await host.waitForTimeout(400);
-await runPower(1, 'backtrace', { targetId: 'p2' });
-const trueBearing = await pages[1].evaluate(() => reveals.backtrace.bearing);
-check('backtrace reads true heading from last two pings', Math.abs(trueBearing) < 5 || Math.abs(trueBearing - 360) < 5,
-  `${Math.round(trueBearing)}° (expected ~0° / north)`);
+check('the decoy walks off on the bearing you chose',
+  decoyWalk.metres >= 45 && decoyWalk.metres <= 55 && Math.abs(decoyWalk.bearing - 90) < 2,
+  `${decoyWalk.metres}m east after a minute, bearing ${decoyWalk.bearing}°`);
+await pages[4].evaluate(() => playerRef().update({ decoy: null }));
 
-await runPower(2, 'false_trail');
-await host.waitForTimeout(400);
-await runPower(1, 'backtrace', { targetId: 'p2' });
-const fakeBearing = await pages[1].evaluate(() => reveals.backtrace.bearing);
-const delta = Math.abs(((fakeBearing - trueBearing) + 540) % 360 - 180);
-check('false trail makes backtrace report a wrong heading', delta > 60,
-  `reported ${Math.round(fakeBearing)}° vs true ${Math.round(trueBearing)}°`);
+// -- Seeker scan: hiders' only sight of a seeker, and it is exact --
+await runPower(2, 'seeker_scan');
+await host.waitForTimeout(900);
+const seekerDots = await host.evaluate(() => {
+  const s1 = playersState.p1;
+  const dot = (s1.pings || [])[s1.pings.length - 1];
+  if (!dot) return null;
+  return { off: Math.round(distanceM(dot, { lat: s1.realLat, lng: s1.realLng })), exact: dot.exact };
+});
+check('seeker scan pins seekers, and does it exactly',
+  seekerDots && seekerDots.off === 0 && seekerDots.exact === true,
+  seekerDots ? `${seekerDots.off}m off, exact=${seekerDots.exact}` : 'no dot');
 
-// -- Lockout: target's own client refuses loadout powers --
+// -- Dot ageing: white, to red, to gone --
+const ageing = await host.evaluate(() => {
+  const now = Date.now();
+  const at = (ms) => pingAppearance({ lat: 0, lng: 0, at: now - ms }, now);
+  return {
+    fresh: at(0), mid: at(CONFIG.ping.fadeStartMs),
+    late: at(CONFIG.ping.fadeStartMs + (CONFIG.ping.lifetimeMs - CONFIG.ping.fadeStartMs) / 2),
+    dead: at(CONFIG.ping.lifetimeMs + 1000),
+  };
+});
+check('a fresh dot is white', ageing.fresh.color === 'rgb(255,255,255)', ageing.fresh.color);
+check('a dot is red by the halfway mark', ageing.mid.color === 'rgb(255,0,0)', ageing.mid.color);
+check('a dot then fades out', ageing.late.opacity > 0 && ageing.late.opacity < 1,
+  `opacity ${ageing.late.opacity.toFixed(2)}`);
+check('a dot expires entirely', ageing.dead === null);
+
+// -- Lockout --
 await runPower(1, 'lockout', { targetId: 'p2' });
-await host.waitForTimeout(500);
-const lockedReason = await pages[2].evaluate(() => powerBlockedReason('smear', me()));
-check('lockout blocks the target\'s loadout powers', lockedReason === 'Locked out.', lockedReason);
-const snitchStillOk = await pages[2].evaluate(() =>
-  powerBlockedReason('smear', me()) === 'Locked out.' && POWERS.smear.loadout === true);
-check('lockout is scoped to loadout powers only', snitchStillOk);
+await host.waitForTimeout(600);
+const lockedReason = await pages[2].evaluate(() => powerBlockedReason('go_quiet', me()));
+check('lockout stops the target using powers', lockedReason === 'Locked out.', lockedReason);
 await pages[2].evaluate(() => playerRef().update({ lockedOutUntil: 0 }));
 
-// -- Go dark + Uncloak --
-await runPower(1, 'go_dark');
-await host.waitForTimeout(600);
-const wentDark = await host.evaluate(() => ({
-  dark: isSeekerDark(playersState.p1),
-  broadcast: playersState.p1.broadcastLat,
-}));
-check('go dark stops the seeker broadcasting', wentDark.dark === true && wentDark.broadcast === null);
-
-const sweepWhileDark = await pages[2].evaluate(() => {
-  const now = Date.now();
-  return Object.values(playersState).filter((p) =>
-    p.role === 'seeker' && p.status === 'active' && p.realLat && !isSeekerDark(p, now)).length;
-});
-await teleport(2, off(-100, 40));
-await host.waitForTimeout(1200);
-await runPower(2, 'uncloak');
-const afterUncloak = await until(host, () => {
-  const r = {
-    dark: isSeekerDark(playersState.p1),
-    forced: playersState.p1.forcedBroadcastUntil > Date.now(),
-  };
-  return (r.dark === false && r.forced === true) ? r : null;
-}) || await host.evaluate(() => ({
-  dark: isSeekerDark(playersState.p1),
-  forced: playersState.p1.forcedBroadcastUntil > Date.now(),
-}));
-check('uncloak forces a nearby dark seeker back into broadcast',
-  afterUncloak.dark === false && afterUncloak.forced === true,
-  `${sweepWhileDark} seeker(s) visible to the hider while dark`);
-
-// -- Beacon + contagion --
-await teleport(3, off(-100, 45));
-await host.waitForTimeout(1000);
-await runPower(1, 'beacon', { targetId: 'p2' });
-const beaconed = await until(host, () => playersState.p2.beaconedUntil > Date.now());
-check('beacon lights up the target', beaconed);
-const spread = await until(host, () => playersState.p3.beaconedUntil > Date.now());
-check('beacon spreads to a hider within 30m', spread);
-await host.evaluate(() => Promise.all([
-  playerRef('p2').update({ beaconedUntil: 0 }),
-  playerRef('p3').update({ beaconedUntil: 0 }),
-]));
-
-// -- Tripwire + Disarm --
-await teleport(1, off(0, 200));
-await host.waitForTimeout(1000);
+// -- Tripwire is cheap, and the one exact reading in the game --
+await teleport(1, off(0, 300));
 await runPower(1, 'tripwire');
 await host.waitForTimeout(500);
-const twCount = await host.evaluate(() => Object.keys(tripwiresState).length);
-check('tripwire is placed', twCount === 1);
+check('tripwire is placed', (await host.evaluate(() => Object.keys(tripwiresState).length)) === 1);
+check('tripwire costs almost nothing',
+  (await host.evaluate(() => CONFIG.seekerPowers.tripwire.cost)) === 5);
 
-await teleport(4, off(0, 195));
+await teleport(4, off(0, 295));
 const tripped = await until(host, () => {
   const tw = Object.values(tripwiresState)[0];
   return !!(tw && tw.triggered);
 });
 check('a hider walking within 20m trips the wire', tripped === true);
+const tripDot = await host.evaluate(() => {
+  const p = playersState.p4;
+  const dot = (p.pings || [])[p.pings.length - 1];
+  return dot ? { exact: dot.exact, off: Math.round(distanceM(dot, { lat: p.realLat, lng: p.realLng })) } : null;
+});
+check('a tripwire reports the exact position',
+  tripDot && tripDot.exact === true && tripDot.off === 0,
+  tripDot ? `exact=${tripDot.exact}, ${tripDot.off}m off` : 'no dot');
 
+// -- Disarm --
 await runPower(1, 'tripwire');
 await host.waitForTimeout(400);
-await teleport(4, off(0, 210));
-await host.waitForTimeout(1200);
+await teleport(4, off(0, 310));
 await runPower(4, 'disarm');
-await host.waitForTimeout(500);
-const remaining = await host.evaluate(() =>
-  Object.values(tripwiresState).filter((t) => !t.triggered).length);
-check('disarm destroys untriggered tripwires within 50m', remaining === 0);
-
-// -- Cordon --
-await runPower(1, 'cordon', { point: off(0, 210) });
 await host.waitForTimeout(600);
-const cordonEffect = await pages[4].evaluate(() => isInsideActiveCordon(myPos));
-check('a hider inside a cordon is flagged for continuous pinging', cordonEffect === true);
-await host.evaluate(async () => {
-  const snap = await gameRef().collection('cordons').get();
-  await Promise.all(snap.docs.map((d) => d.ref.delete()));
-});
+check('disarm destroys untriggered tripwires within 50m',
+  (await host.evaluate(() => Object.values(tripwiresState).filter((t) => !t.triggered).length)) === 0);
+
+// -- the cut powers really are gone --
+const gone = await host.evaluate(() => ['smear', 'false_trail', 'backtrace', 'beacon',
+  'cordon', 'go_dark', 'read_the_sweep', 'uncloak', 'silent_run'].filter((k) => POWERS[k]));
+check('every cut power is actually gone', gone.length === 0, gone.join(', ') || 'none left');
+
+// -- the economy hits the two-minute target --
+const pace = await host.evaluate(() => ({
+  probe: CONFIG.seekerPowers.probe.cost,
+  perMin: CONFIG.charge.regenPerMs * 60000,
+}));
+const minutesPerProbe = pace.probe / pace.perMin;
+check('a seeker can probe about every two minutes',
+  minutesPerProbe > 1.5 && minutesPerProbe < 2.5,
+  `${minutesPerProbe.toFixed(1)} min per probe`);
 
 // ================= TIER 3 / totems + sabotage =================
 
@@ -648,13 +615,26 @@ check('snitch survey bands fidelity by range',
   survey.find((s) => s.name === 'Hide2').r === 50,
   survey.map((s) => `${s.name}@${s.d}m=${s.r || 'exact'}`).join(', '));
 
+const dotsBeforeSnitch = await dotsOf('p4');
 await pages[2].evaluate(async () => { await beginSnitch(); });
 await host.waitForTimeout(600);
 await pages[2].evaluate(() => snitchOn('p4'));
-await host.waitForTimeout(800);
-const seekerGotReport = await pages[1].evaluate(() =>
-  reveals.scan && reveals.scan.points.some((p) => p.name === 'Hide3'));
-check('snitch delivers the position to the hunting seeker', seekerGotReport === true);
+// Betrayal is a ping like any other now: a dot lands on the sold-out hider,
+// and the seeker holding the mark is told to go and look.
+const snitchDot = await until(host, ([id, n]) => (playersState[id].pings || []).length > n,
+  ['p4', dotsBeforeSnitch]);
+check('snitch puts a dot on the sold-out hider', snitchDot === true,
+  `${await dotsOf('p4')} dot(s), was ${dotsBeforeSnitch}`);
+const seekerGotReport = await until(host, async () => {
+  const snap = await gameRef().collection('events').get();
+  let found = false;
+  snap.forEach((d) => {
+    const e = d.data();
+    if (e.type === 'snitch_report' && e.to === 'p1' && e.name === 'Hide3') found = true;
+  });
+  return found;
+});
+check('snitch tells the hunting seeker to look', seekerGotReport === true);
 const snitchUsedUp = await pages[2].evaluate(() => snitchAvailableReason(me()));
 check('snitch is once per hunt', snitchUsedUp === 'Already used for this hunt.', snitchUsedUp);
 
@@ -700,14 +680,33 @@ const breach = await host.evaluate(() => ({
 check('leaving the boundary starts a confirmed breach countdown',
   breach.readings >= 3 && breach.started, `${breach.readings} consecutive readings`);
 
-// The forced exposure lands on the breaching player's next fix, a beat
-// after the breach flag itself propagates.
-const exposed = await until(host, () => {
-  const h = playersState.p4;
-  if (!h.broadcastLat) return false;
-  return distanceM({ lat: h.realLat, lng: h.realLng }, { lat: h.broadcastLat, lng: h.broadcastLng }) < 5;
+// Nothing pings on its own any more — except this. Stepping outside the
+// boundary gives you away repeatedly, for free, until you come back, and no
+// counter-power stops it.
+// Count by timestamp, not by length: only the last dozen dots are kept, so
+// once a player's trail is full, more pings stop making it any longer.
+const breachSince = Date.now();
+const breachExposure = await until(host, ([id, since]) => {
+  const h = playersState[id];
+  const fresh = (h.pings || []).filter((d) => d.at > since);
+  if (fresh.length < 2) return false;
+  const last = fresh[fresh.length - 1];
+  return { off: Math.round(distanceM(last, { lat: h.realLat, lng: h.realLng })) };
+}, ['p4', breachSince], 25000);
+check('a breaching hider is pinged over and over until they come back',
+  !!breachExposure && breachExposure.off <= 31,
+  breachExposure ? `repeated dots, latest ${breachExposure.off}m off` : 'no repeat dots');
+
+// Nothing a hider can buy covers a breach — that is what makes it a penalty
+// rather than a risk to be managed.
+const breachIgnoresCover = await pages[4].evaluate(async () => {
+  await playerRef().update({ goQuietUntil: Date.now() + 60000 });
+  const since = Date.now();
+  await new Promise((r) => setTimeout(r, 14000));
+  return (me().pings || []).filter((d) => d.at > since).length > 0;
 });
-check('a breaching hider pings their true position continuously', exposed === true);
+check('going quiet does not hide a breach', breachIgnoresCover === true);
+await pages[4].evaluate(() => playerRef().update({ goQuietUntil: 0 }));
 
 await teleport(4, off(0, 100));
 await host.waitForTimeout(6000);

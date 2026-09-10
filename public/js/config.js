@@ -8,15 +8,15 @@ const CONFIG = {
   endConditionMode: 'elimination', // or 'time_limit'
 
   // How often each client runs its local rules pass (boundary, sabotage,
-  // beacon contagion, tripwires, totem pings, hunt bearings).
+  // tripwires, totem pings, hunt bearings).
   tickMs: 3000,
 
-  // How often a client is allowed to push its position to Firestore.
-  // GPS fires about once a second; writing every fix costs roughly 88,000
-  // writes for a 90-minute five-player game, which blows the free Spark
-  // quota (20,000/day) about twenty minutes in. Throttling on movement is
-  // self-correcting: a position only goes stale while someone is standing
-  // still, and a stationary player's last position is still correct.
+  // How often a client pushes its true position to the Durable Object.
+  // GPS fires about once a second; writing every fix is roughly 88,000
+  // writes for a 90-minute five-player game, and those bytes cross someone's
+  // mobile data. Throttling on movement is self-correcting: a position only
+  // goes stale while a player is standing still, and a stationary player's
+  // last position is still correct.
   sync: {
     minWriteIntervalMs: 5000,   // never write more often than this
     keepaliveMs: 30000,         // ...but always write at least this often
@@ -26,48 +26,53 @@ const CONFIG = {
 
   charge: {
     cap: 100,
-    regenPerMs: 1 / 20000, // 1 point every 20 seconds
+    // THE PACING NUMBER. Nothing pings on its own any more, so how often
+    // anyone can be found is set entirely here. A Probe costs 30, so this
+    // regen rate means a seeker can sweep roughly every two minutes.
+    // Halve the regen and the game slows down everywhere at once.
+    regenPerMs: 1 / 4000, // 1 point every 4 seconds — 15/min
     globalCooldownMs: 60000,
     conversionStartingCharge: 30,
     conversionGraceMs: 60000,
   },
 
+  // Positions are never reported automatically. Every dot on the map was
+  // paid for by somebody.
   ping: {
-    phase1EndPct: 40,
-    phase2EndPct: 75,
-    phase1StationaryMs: 5 * 60000,
-    phase1MovingMs: 2 * 60000,
-    phase2StationaryMs: 4 * 60000,
-    phase2MovingMs: 90 * 1000,
-    phase3StationaryMs: 2 * 60000,
-    phase3MovingMs: 45 * 1000,
-    growthRateMPerMinPhase12: 40,
-    growthRateMPerMinPhase3: 20,
-    uncertaintyCapFraction: 0.5, // fraction of M
-    movingThresholdMPerMin: 20, // speed above this = "moving" state
-    historyLength: 3, // pings retained for Backtrace
+    // A dot's whole life. White at birth, shading to red by the halfway
+    // mark, then fading to nothing.
+    lifetimeMs: 10 * 60000,
+    fadeStartMs: 5 * 60000,
+    // Reported positions are wrong by up to this much, rolled fresh each
+    // time. Two pings on a player who has not moved an inch can land 60m
+    // apart in unrelated directions — so a still player can look like a
+    // moving one, and the trail drawn between their dots lies about which
+    // way they went. DISPLAY ONLY: never used for tripwires, sabotage,
+    // capture range or boundary checks.
+    jitterRadiusM: 30,
+    maxStored: 12, // dots kept per player; comfortably more than a lifetime
+    dotRadiusPx: 7,
+    trailWidthPx: 3,
   },
 
   hiderPowers: {
-    smear: { cost: 20, durationMs: null, arcHalfWidthDeg: 45 }, // applies to next ping only
-    false_trail: { cost: 20, durationMs: 5 * 60000 },
-    disarm: { cost: 20, radiusM: 50 },
-    go_quiet: { cost: 30, durationMs: null }, // skips next ping
-    uncloak: { cost: 30, radiusM: 300, forceBroadcastMs: 60000 },
-    read_the_sweep: { cost: 30, durationMs: 30000, seekerCoverageRadiusM: 100 },
-    silent_run: { cost: 60, durationMs: 3 * 60000 },
-    decoy: { cost: 60, durationMs: 3 * 60000, paceKmh: 3 },
+    disarm: { cost: 15, radiusM: 50 },
+    go_quiet: { cost: 20, durationMs: 3 * 60000 },
+    decoy: { cost: 35, durationMs: 3 * 60000, paceKmh: 3 },
+    seeker_scan: { cost: 40, displayMs: 20000 },
   },
 
   seekerPowers: {
-    probe: { cost: 20, radiusM: 100 },
-    backtrace: { cost: 20, displayMs: 30000 },
-    tripwire: { cost: 30, triggerRadiusM: 20 },
-    go_dark: { cost: 30, durationMs: 3 * 60000 },
-    lockout: { cost: 30, durationMs: 3 * 60000 },
-    scan: { cost: 45, radiusM: 100, displayMs: 15000 },
-    beacon: { cost: 45, radiusM: 30, durationMs: 5 * 60000 },
-    cordon: { cost: 40, radiusM: 150, durationMs: 5 * 60000 },
+    // A 180° sweep from you out to the boundary, pinging everything in that
+    // half of the world. Deliberately expensive: it is the most information
+    // anyone can buy in one action, and two of them cover the whole map.
+    probe: { cost: 30, halfWidthDeg: 90 },
+    // Direction only, never position. One coloured glow per player at the
+    // screen edge, so it tells you how many and roughly where, and nothing
+    // else. Cheap enough to use as the opener before a Probe.
+    scan: { cost: 15, displayMs: 25000 },
+    tripwire: { cost: 5, triggerRadiusM: 20 },
+    lockout: { cost: 25, durationMs: 3 * 60000 },
     totem: { cost: 60, maxUndeployed: 2, maxLive: 10 },
   },
 
@@ -134,8 +139,8 @@ const CONFIG = {
 // destination and your token walks there at speed. Travel time is what makes
 // the game work, so it is kept, just compressed.
 //
-// Everything else is identical: the same uncertainty circles, powers,
-// totems, hunts and sabotage, on a round that fits in about ten minutes.
+// Everything else is identical: the same dots, powers, totems, hunts and
+// sabotage, on a round that fits in about ten minutes.
 // ---------------------------------------------------------------
 
 const LIVING_ROOM = {
@@ -164,15 +169,10 @@ function applyGameMode(mode) {
   CONFIG.sync.movementThresholdM = 12;
   CONFIG.tickMs = 1000;
 
-  ['phase1StationaryMs', 'phase1MovingMs', 'phase2StationaryMs', 'phase2MovingMs',
-   'phase3StationaryMs', 'phase3MovingMs'].forEach((k) => {
-    CONFIG.ping[k] = shorter(CONFIG.ping[k]);
-  });
-  // Uncertainty is per minute of real time, so it has to grow faster to cover
-  // the same ground within a compressed round.
-  CONFIG.ping.growthRateMPerMinPhase12 *= t;
-  CONFIG.ping.growthRateMPerMinPhase3 *= t;
-  CONFIG.ping.movingThresholdMPerMin *= t;
+  // A dot that outlives the round tells you nothing, so the trail is
+  // compressed with everything else.
+  CONFIG.ping.lifetimeMs = shorter(CONFIG.ping.lifetimeMs);
+  CONFIG.ping.fadeStartMs = shorter(CONFIG.ping.fadeStartMs);
 
   CONFIG.charge.regenPerMs *= t;
   CONFIG.charge.globalCooldownMs = shorter(CONFIG.charge.globalCooldownMs);
@@ -181,7 +181,6 @@ function applyGameMode(mode) {
   [CONFIG.hiderPowers, CONFIG.seekerPowers].forEach((table) => {
     Object.values(table).forEach((power) => {
       if (power && typeof power.durationMs === 'number') power.durationMs = shorter(power.durationMs);
-      if (power && typeof power.forceBroadcastMs === 'number') power.forceBroadcastMs = shorter(power.forceBroadcastMs);
       if (power && typeof power.displayMs === 'number') power.displayMs = shorter(power.displayMs);
     });
   });

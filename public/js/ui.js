@@ -1,7 +1,8 @@
 // UI rendering and all user interaction.
 //
 // Visibility rules live here and are deliberately sparse: hiders see nothing
-// but themselves and the shared world (boundary, totems, cordons, signposts).
+// but themselves and the shared world (boundary, totems, signposts). Every
+// dot of another player was paid for by someone spending charge.
 // Powers are what punch temporary holes in that — see `reveals` in powers.js.
 
 // Map palette, kept in step with css/style.css. Anything that threatens you
@@ -27,6 +28,7 @@ const MAP = {
   wood:       '#6b5638',
   woodLit:    '#9a825a',
   violet:     '#8e5fa8',
+  own:        '#4ade80',   // your own trail — green, so you can tell it apart
 };
 
 let currentPlayerName = '';
@@ -271,61 +273,6 @@ el('input-headstart').onchange = async () => {
   toast(mins ? `Head start set to ${mins} min.` : 'Head start removed.');
 };
 
-// ---------- lobby: loadout ----------
-
-function loadoutKeys() {
-  return Object.keys(POWERS).filter((k) => POWERS[k].loadout);
-}
-
-function renderLoadoutPicker() {
-  const host = el('loadout-options');
-  if (host.dataset.built) { updateLoadoutCount(); return; }
-  host.innerHTML = '';
-  loadoutKeys().forEach((key) => {
-    const def = POWERS[key];
-    const label = document.createElement('label');
-    label.className = 'checkline';
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.value = key;
-    box.onchange = onLoadoutChange;
-    label.appendChild(box);
-    const span = document.createElement('span');
-    span.innerHTML = `<strong>${def.label}</strong> <em>${def.cost()}</em><br><small>${def.desc}</small>`;
-    label.appendChild(span);
-    host.appendChild(label);
-  });
-  host.dataset.built = '1';
-  // Sensible default so nobody starts the game with an empty loadout.
-  const defaults = ['go_quiet', 'smear', 'silent_run'];
-  host.querySelectorAll('input').forEach((b) => { b.checked = defaults.includes(b.value); });
-  onLoadoutChange();
-}
-
-function selectedLoadout() {
-  return Array.from(el('loadout-options').querySelectorAll('input:checked')).map((b) => b.value);
-}
-
-function onLoadoutChange() {
-  const picked = selectedLoadout();
-  if (picked.length > 4) {
-    toast('Loadout is 3–4 powers.');
-    // Uncheck the most recent over-pick.
-    const boxes = Array.from(el('loadout-options').querySelectorAll('input:checked'));
-    boxes[boxes.length - 1].checked = false;
-    return;
-  }
-  updateLoadoutCount();
-  if (playerId) playerRef().update({ loadout: selectedLoadout() }).catch(() => {});
-}
-
-function updateLoadoutCount() {
-  const n = selectedLoadout().length;
-  el('loadout-count').textContent = n < 3
-    ? `${n} of 3–4 chosen — pick ${3 - n} more.`
-    : `${n} of 3–4 chosen.`;
-}
-
 // ---------- lobby: host start ----------
 
 el('btn-assign-roles').onclick = async () => {
@@ -369,15 +316,14 @@ function renderLobbyList(players) {
     const bits = [p.name];
     if (p.isHost) bits.push('(host)');
     if (p.role) bits.push('— ' + p.role);
-    if (p.role === 'hider' && p.loadout && p.loadout.length >= 3) bits.push('✓');
     li.textContent = bits.join(' ');
     list.appendChild(li);
   });
 }
 
 // The lobby runs in order: everyone joins, the host assigns roles, and only
-// then do hiders choose powers — picking a loadout before you know whether
-// you're even a hider is meaningless.
+// then the game starts. Everyone gets their role's full set of powers —
+// there is nothing to choose.
 function renderLobby(players) {
   const p = players[playerId];
   if (!p) return;
@@ -396,34 +342,32 @@ function renderLobby(players) {
 
   const title = el('role-title');
   const note = el('role-note');
-  const loadout = el('loadout-card');
 
   if (!p.role) {
     title.textContent = 'Waiting for roles';
-    note.innerHTML = 'The host assigns roles once everyone has joined. You pick your powers after that.' +
-      '<br><br>Never played? Tap <strong>How to play</strong> above.';
-    loadout.style.display = 'none';
+    note.innerHTML = 'The host assigns roles once everyone has joined.'
+      + '<br><br>Never played? Tap <strong>How to play</strong> above.';
   } else if (p.role === 'seeker') {
     title.textContent = "You're a SEEKER";
     note.innerHTML =
-      '<strong>Your job:</strong> find every hider before the clock runs out.<br><br>' +
-      'You can see roughly where hiders are — a circle that grows the longer they stay put, ' +
-      'so campers get easier to find. Hiders cannot see you at all, unless they spend a power.<br><br>' +
-      'To catch someone you have to physically reach them and get them to read out their ' +
-      '4-letter code. There is no tag button.<br><br>' +
-      'Seekers all share the same powers, so there is nothing to choose here.';
-    loadout.style.display = 'none';
+      '<strong>Your job:</strong> find every hider before the clock runs out.<br><br>'
+      + 'Hiders are invisible. Nothing appears on your map unless you pay for it — '
+      + '<strong>Scan</strong> tells you roughly which directions they are in, '
+      + '<strong>Probe</strong> sweeps half the map and pins whoever is in it. '
+      + 'What you get back is only good to about 30m, so someone standing still '
+      + 'can look like they are moving.<br><br>'
+      + 'To catch someone you have to physically reach them and get them to read '
+      + 'out their 4-letter code. There is no tag button.';
   } else {
     title.textContent = "You're a HIDER";
     note.innerHTML =
-      '<strong>Your job:</strong> stay unfound for as long as you can. You are scored on survival time.<br><br>' +
-      'Your phone reports your position now and then. Staying still makes that report vaguer — ' +
-      'but the reports pile up in the same spot, so camping forever gets you caught. ' +
-      'Moving keeps the circle tight but reports more often.<br><br>' +
-      'You cannot see the seekers unless you spend a power on it.<br><br>' +
-      'Pick the powers you want to carry. You cannot change them once the game starts.';
-    loadout.style.display = 'block';
-    renderLoadoutPicker();
+      '<strong>Your job:</strong> stay unfound. You are scored on survival time.<br><br>'
+      + 'You are invisible by default — your phone never gives you away on its own. '
+      + 'You only appear when a seeker spends a power to find you, and even then '
+      + 'the dot they get is up to 30m out.<br><br>'
+      + '<strong>Go quiet</strong> eats the next ping aimed at you. '
+      + '<strong>Decoy</strong> sends that ping somewhere you are not. '
+      + '<strong>Seeker scan</strong> is your only way of ever seeing them.';
   }
 
   if (p.isHost) renderHostLobbyStatus(players);
@@ -433,24 +377,19 @@ function renderHostLobbyStatus(players) {
   const all = Object.values(players);
   const assigned = all.filter((x) => x.role).length;
   const seekers = all.filter((x) => x.role === 'seeker').length;
-  const hiders = all.filter((x) => x.role === 'hider');
+  const hiders = all.filter((x) => x.role === 'hider').length;
+  const unassigned = all.filter((x) => !x.role);
 
   el('roles-status').textContent = assigned
-    ? `${seekers} seeker(s), ${hiders.length} hider(s).`
+    ? `${seekers} seeker(s), ${hiders} hider(s).`
     : `${all.length} player(s) here. Nobody has a role yet.`;
 
-  const waiting = hiders.filter((h) => !h.loadout || h.loadout.length < 3);
-  const unassigned = all.filter((x) => !x.role);
-  const blocked = !assigned || unassigned.length > 0 || waiting.length > 0;
-
-  el('btn-start-game').disabled = blocked;
+  el('btn-start-game').disabled = !assigned || unassigned.length > 0;
   el('ready-status').textContent = !assigned
     ? 'Assign roles before starting.'
     : unassigned.length
       ? `No role yet: ${unassigned.map((x) => x.name).join(', ')}.`
-      : waiting.length
-        ? `Waiting on powers: ${waiting.map((h) => h.name).join(', ')}.`
-        : 'Everyone is ready. Starting begins hiding time.';
+      : 'Everyone is ready. Starting begins hiding time.';
 }
 
 // ---------- game status ----------
@@ -572,17 +511,11 @@ function renderBanners(p, now) {
   if (p.lockedOutUntil && now < p.lockedOutUntil) {
     items.push(['warn', `Locked out for ${Math.ceil((p.lockedOutUntil - now) / 1000)}s.`]);
   }
-  if (p.beaconedUntil && now < p.beaconedUntil) {
-    items.push(['warn', `Beaconed — you are lit up for ${Math.ceil((p.beaconedUntil - now) / 1000)}s.`]);
-  }
   if (p.breachStartedAt) {
     const left = Math.ceil((CONFIG.boundary.breachTimerMs - (now - p.breachStartedAt)) / 1000);
     items.push(['danger', `OUT OF BOUNDS — eliminated in ${left}s.`]);
   } else if (boundaryWarningM != null) {
     items.push(['warn', `Approaching the boundary (${Math.round(boundaryWarningM)}m).`]);
-  }
-  if (p.role === 'hider' && myPos && isInsideActiveCordon(myPos, now)) {
-    items.push(['danger', 'Inside a cordon — you are pinging continuously.']);
   }
 
   const marks = activeMarksOn(p, now);
@@ -618,7 +551,6 @@ function buildPowerButtons() {
   if (!p || !p.role) return;
   Object.entries(POWERS).forEach(([key, def]) => {
     if (def.role !== p.role) return;
-    if (def.loadout && p.loadout && !p.loadout.includes(key)) return;
     const b = document.createElement('button');
     b.className = 'power';
     b.dataset.power = key;
@@ -905,25 +837,14 @@ el('btn-quit').onclick = async () => {
 
 function onGameEvent(e) {
   switch (e.type) {
-    case 'tripwire':
-      toast('Tripwire triggered.');
-      reveals.probe = { lat: e.lat, lng: e.lng, radiusM: CONFIG.seekerPowers.tripwire.triggerRadiusM, hit: true, expiresAt: Date.now() + 60000 };
-      renderWorld();
-      break;
+    case 'tripwire': toast('Tripwire triggered — exact position on your map.'); break;
     case 'lockout': toast('A seeker has locked out your powers.'); break;
-    case 'beacon': toast('You have been beaconed — your exact position is showing.'); break;
-    case 'uncloaked': toast('You have been uncloaked — you are broadcasting again.'); break;
+    case 'pinged': toast('You have just been pinged.'); break;
+    case 'go_quiet_used': toast('Go quiet absorbed a ping. You are visible again.'); break;
     case 'hunted': toast('You are being hunted.'); break;
     case 'hunt_cleared': toast('Your mark was cleared — they sabotaged a totem.'); break;
     case 'totem_destroyed': toast('A totem has been destroyed.'); break;
-    case 'snitch_report':
-      toast(`Snitch: ${e.name} located.`);
-      reveals.scan = {
-        points: [{ lat: e.lat, lng: e.lng, name: e.name, radiusM: e.radiusM }],
-        expiresAt: Date.now() + 120000,
-      };
-      renderWorld();
-      break;
+    case 'snitch_report': toast(`Someone sold out ${e.name}.`); break;
     case 'panic':
       showPanicAlert(e);
       break;
@@ -956,15 +877,6 @@ function renderWorld() {
     }));
   }
 
-  // Cordons — everyone; hiders need to see them to get out.
-  Object.values(cordonsState).forEach((c) => {
-    if (now >= c.expiresAt) return;
-    add(L.circle([c.lat, c.lng], {
-      radius: c.radiusM, color: MAP.bruise, fillColor: MAP.bruise,
-      fillOpacity: 0.12, weight: 2,
-    }).bindTooltip('Cordon'));
-  });
-
   // Totems — everyone. Grey while being sabotaged, on both roles' maps.
   Object.entries(totemsState).forEach(([id, t]) => {
     if (t.status !== 'active') return;
@@ -988,17 +900,20 @@ function renderWorld() {
     }
   });
 
-  // Totem pings — seekers only.
+  // Totem contacts — seekers only. Exact, and anonymous: they age like any
+  // other dot but carry no name, so a stack of them means somebody is camping
+  // and a drifting line means somebody walked through.
   if (p.role === 'seeker') {
     Object.values(totemsState).forEach((t) => {
       (t.recentPings || []).forEach((ping) => {
-        const ageMs = now - ping.at;
-        if (ageMs > 3 * 60000) return;
-        add(L.circle([ping.lat, ping.lng], {
-          radius: CONFIG.baseAccuracyRadiusM,
-          color: MAP.ember, fillColor: MAP.ember,
-          fillOpacity: Math.max(0.08, 0.35 - ageMs / 600000), weight: 1,
-        }).bindTooltip('Totem contact'));
+        const look = pingAppearance(ping, now);
+        if (!look) return;
+        add(L.circleMarker([ping.lat, ping.lng], {
+          radius: CONFIG.ping.dotRadiusPx,
+          color: look.color, fillColor: look.color,
+          fillOpacity: look.opacity * 0.8, opacity: look.opacity,
+          weight: 2, dashArray: '2 3',
+        }).bindTooltip(`Totem contact · ${Math.round((now - ping.at) / 1000)}s ago · exact`));
       });
     });
   }
@@ -1020,10 +935,9 @@ function renderWorld() {
     }).bindTooltip(tw.triggered ? 'Tripwire (sprung)' : 'Tripwire'));
   });
 
-  if (p.role === 'seeker') renderForSeeker(p, now, add);
-  if (p.role === 'hider') renderForHider(p, now, add);
-
+  renderTrails(p, now, add);
   renderReveals(p, now, add);
+  renderScanGlow();
 
   // Panic markers — exact, to everyone, permanently.
   panicAlerts.forEach((e) => {
@@ -1076,100 +990,64 @@ function totemTooltip(id, t, p, now) {
   return bits.join(' · ');
 }
 
-function renderForSeeker(p, now, add) {
+// Everything anyone sees of another player is their trail of paid-for pings:
+// a dot per reading, white when fresh, shading to red over five minutes, then
+// fading out over five more. A faint line joins consecutive dots — which,
+// because reported positions are fuzzy, will sometimes draw a confident
+// journey for somebody who never moved.
+function renderTrails(p, now, add) {
   Object.entries(playersState).forEach(([id, other]) => {
-    if (other.status !== 'active' || id === playerId) return;
+    const isSelf = id === playerId;
 
-    // Seekers always see each other exactly.
-    if (other.role === 'seeker' && other.realLat) {
-      add(L.marker([other.realLat, other.realLng])
-        .bindTooltip(other.name, { permanent: true, direction: 'top' }));
-      return;
+    // You always see your own trail, in green, so you know what you have been
+    // giving away. Otherwise you only ever see the other side.
+    if (!isSelf) {
+      const wantRole = p.role === 'hider' ? 'seeker' : 'hider';
+      if (other.role !== wantRole) return;
     }
 
-    if (other.role !== 'hider') return;
+    const dots = livePings(other, now);
+    if (!dots.length) return;
 
-    // A beaconed hider is lit up exactly and continuously.
-    if (other.beaconedUntil && now < other.beaconedUntil && other.realLat) {
-      add(L.circleMarker([other.realLat, other.realLng], {
-        radius: 9, color: MAP.amber, fillColor: MAP.amberLit, fillOpacity: 0.9,
-      }).bindTooltip(`${other.name} (beaconed)`, { permanent: true, direction: 'top' }));
-      return;
+    for (let k = 1; k < dots.length; k++) {
+      const a = dots[k - 1];
+      const b = dots[k];
+      const look = pingAppearance(b, now);
+      if (!look) continue;
+      add(L.polyline([[a.lat, a.lng], [b.lat, b.lng]], {
+        color: isSelf ? MAP.own : look.color,
+        opacity: look.opacity * 0.35,
+        weight: CONFIG.ping.trailWidthPx,
+      }));
     }
 
-    if (!other.broadcastLat) return;
-
-    if (other.broadcastMode === 'arc' && other.broadcastArc) {
-      const a = other.broadcastArc;
-      add(L.polygon(arcPolygon({ lat: other.broadcastLat, lng: other.broadcastLng },
-        a.bearing, a.halfWidthDeg, a.radiusM), {
-        color: MAP.blood, fillColor: MAP.bloodDim, fillOpacity: 0.15, weight: 1,
-      }).bindTooltip(`${other.name} (smeared)`));
-      return;
-    }
-
-    const radius = displayRadiusM(other, now);
-    add(L.circle([other.broadcastLat, other.broadcastLng], {
-      radius, color: MAP.blood, fillColor: MAP.bloodDim, fillOpacity: 0.22, weight: 1,
-    }).bindTooltip(`${other.name} · ${Math.round(radius)}m · ${Math.round((now - other.broadcastAt) / 1000)}s ago`));
-  });
-}
-
-function renderForHider(p, now, add) {
-  // Hiders see nothing about other players by default. Read the sweep (and
-  // Uncloak's forced broadcast) is the only default-visibility exception.
-  if (!revealActive('sweep', now)) return;
-  const coverage = CONFIG.hiderPowers.read_the_sweep.seekerCoverageRadiusM;
-  Object.entries(playersState).forEach(([id, other]) => {
-    if (other.role !== 'seeker' || other.status !== 'active' || !other.realLat) return;
-    if (isSeekerDark(other, now)) return;
-    add(L.circle([other.realLat, other.realLng], {
-      radius: coverage, color: MAP.gloom, fillColor: MAP.gloom,
-      fillOpacity: 0.18, weight: 1,
-    }));
-    add(L.circleMarker([other.realLat, other.realLng], {
-      radius: 6, color: MAP.gloom, fillColor: MAP.ashLit, fillOpacity: 1,
-    }).bindTooltip(other.name));
+    dots.forEach((dot) => {
+      const look = pingAppearance(dot, now);
+      if (!look) return;
+      const fresh = now - dot.at < 20000;
+      add(L.circleMarker([dot.lat, dot.lng], {
+        radius: CONFIG.ping.dotRadiusPx,
+        color: isSelf ? MAP.own : look.color,
+        fillColor: isSelf ? MAP.own : look.color,
+        fillOpacity: look.opacity,
+        opacity: look.opacity,
+        weight: dot.exact ? 2 : 1,
+      }).bindTooltip(
+        `${isSelf ? 'You' : other.name} · ${Math.round((now - dot.at) / 1000)}s ago`
+          + (dot.exact ? ' · exact' : ''),
+        fresh ? { permanent: true, direction: 'top' } : {}));
+    });
   });
 }
 
 function renderReveals(p, now, add) {
-  if (revealActive('scan', now)) {
-    reveals.scan.points.forEach((pt) => {
-      if (pt.radiusM) {
-        add(L.circle([pt.lat, pt.lng], {
-          radius: pt.radiusM, color: MAP.rot, fillColor: MAP.rotLit,
-          fillOpacity: 0.25, weight: 2,
-        }).bindTooltip(pt.name, { permanent: true, direction: 'top' }));
-      } else {
-        add(L.circleMarker([pt.lat, pt.lng], {
-          radius: 9, color: MAP.rot, fillColor: MAP.rotLit, fillOpacity: 0.9,
-        }).bindTooltip(pt.name, { permanent: true, direction: 'top' }));
-      }
-    });
-    if (reveals.scan.origin) {
-      add(L.circle([reveals.scan.origin.lat, reveals.scan.origin.lng], {
-        radius: reveals.scan.radiusM, color: MAP.rot, fill: false, weight: 1, dashArray: '4 4',
-      }));
-    }
-  }
-
+  // The Probe wave, shown briefly so you can see what you just swept.
   if (revealActive('probe', now)) {
-    add(L.circle([reveals.probe.lat, reveals.probe.lng], {
-      radius: reveals.probe.radiusM,
-      color: reveals.probe.hit ? MAP.rot : MAP.ash,
-      fillColor: reveals.probe.hit ? MAP.rotLit : MAP.ashLit,
-      fillOpacity: 0.2, weight: 2,
-    }).bindTooltip(reveals.probe.hit ? 'Hider present' : 'Empty'));
-  }
-
-  if (revealActive('backtrace', now) && reveals.backtrace.lat) {
-    const b = reveals.backtrace;
-    const from = { lat: b.lat, lng: b.lng };
-    const to = destinationPoint(from, b.bearing, Math.max(150, 0.1 * M));
-    add(L.polyline([[from.lat, from.lng], [to.lat, to.lng]], {
-      color: MAP.cold, weight: 3, dashArray: '8 5',
-    }).bindTooltip(`${b.name} heading ${Math.round(b.bearing)}°`));
+    const r = reveals.probe;
+    add(L.polygon(arcPolygon(r.origin, r.bearing, r.halfWidthDeg, r.radiusM), {
+      color: MAP.cold, fillColor: MAP.cold, fillOpacity: 0.08,
+      weight: 1, dashArray: '6 6',
+    }));
   }
 
   if (revealActive('disarm', now)) {
@@ -1182,16 +1060,9 @@ function renderReveals(p, now, add) {
 
   if (revealActive('snitch', now)) {
     reveals.snitch.entries.forEach((e) => {
-      if (e.radiusM) {
-        add(L.circle([e.lat, e.lng], {
-          radius: e.radiusM, color: MAP.violet, fillColor: MAP.violet,
-          fillOpacity: 0.2, weight: 2,
-        }).bindTooltip(e.name, { permanent: true, direction: 'top' }));
-      } else {
-        add(L.circleMarker([e.lat, e.lng], {
-          radius: 8, color: MAP.violet, fillColor: MAP.violet, fillOpacity: 0.9,
-        }).bindTooltip(e.name, { permanent: true, direction: 'top' }));
-      }
+      add(L.circleMarker([e.lat, e.lng], {
+        radius: 8, color: MAP.violet, fillColor: MAP.violet, fillOpacity: 0.9,
+      }).bindTooltip(e.name, { permanent: true, direction: 'top' }));
     });
   }
 
@@ -1213,6 +1084,25 @@ function renderReveals(p, now, add) {
   }
 }
 
+// ---------- Scan: direction only, at the edge of the screen ----------
+// One glow per hider, each its own colour, so it says how many and roughly
+// which way — and refuses to say anything more.
+function renderScanGlow() {
+  const host = el('scan-glow');
+  if (!host) return;
+  const now = Date.now();
+  if (!revealActive('scan', now)) { host.innerHTML = ''; host.style.display = 'none'; return; }
+
+  host.style.display = 'block';
+  host.innerHTML = '';
+  reveals.scan.bearings.forEach((b) => {
+    const wedge = document.createElement('div');
+    wedge.className = 'scan-wedge';
+    wedge.style.background = 'conic-gradient(from ' + (b.bearing - 28)
+      + 'deg, transparent 0deg, ' + b.color + ' 28deg, transparent 56deg)';
+    host.appendChild(wedge);
+  });
+}
 
 // ---------- how to play ----------
 // Written for someone handed a phone in a park with no idea what this is.
@@ -1227,11 +1117,20 @@ function howToPlayHtml(role) {
        <strong>keep the screen on and the app open</strong> — if you lock your
        phone, it stops reporting you.</p>
 
-    <h4>Nobody's position is exact</h4>
-    <p>Seekers don't see hiders as dots. They see a <em>circle</em> that the
-       hider is somewhere inside. The circle grows the longer someone stays
-       still, and snaps tight again when they move — but moving reports you
-       more often. That trade is the whole game.</p>
+    <h4>The map is empty, and staying empty costs money</h4>
+    <p>Nobody shows up on the map on their own. <em>Every dot you ever see was
+       paid for</em> — somebody spent a power to make it appear. Between those
+       moments, everyone is invisible.</p>
+
+    <h4>Reading a dot</h4>
+    <p>A dot is where someone was when they got found out — and it is only
+       accurate to about 30 metres, rolled fresh every time. Two dots on
+       somebody standing perfectly still can land 60m apart, so a faint smear
+       between dots is a hint about direction, never proof.</p>
+    <p>Dots age in colour. <strong>White</strong> is seconds old and worth
+       running at. It shades to <strong>red</strong> over five minutes, then
+       fades away over five more. Your own dots are <strong>green</strong>, so
+       you can see exactly what you have given away.</p>
 
     <h4>Getting caught</h4>
     <p>There is no tag button. A seeker has to physically find you and ask for
@@ -1239,25 +1138,36 @@ function howToPlayHtml(role) {
        it out, they type it in, and you switch sides and start seeking.</p>
 
     <h4>Powers</h4>
-    <p>Everything costs <em>charge</em>, shown as ⚡ at the top. It refills slowly
-       on its own, and there's a cooldown after each use, so you can't chain them.
-       Tap and hold a power to read what it does.</p>
+    <p>Everything costs <em>charge</em>, shown as ⚡ at the top. It refills on its
+       own at about 15 a minute, and there is a cooldown after each use, so you
+       cannot chain them. You have your whole side's set — there is nothing to
+       choose in advance. Tap and hold a power to read what it does.</p>
 
     <h4>Staying safe</h4>
-    <p>Stay inside the boundary — step outside and a countdown starts, and you're
-       out if it finishes. The <strong>Help</strong> button is not part of the game:
-       it tells everyone exactly where you are and ends your round. Use it if
-       something goes actually wrong. It is not an emergency service — call one
-       of those if you need one.</p>`;
+    <p>Stay inside the boundary. Step outside and a countdown starts, you are out
+       if it finishes — and while you are out there the game gives your position
+       away again and again, for free, and no power stops it. The
+       <strong>Help</strong> button is not part of the game: it tells everyone
+       exactly where you are and ends your round. Use it if something goes
+       actually wrong. It is not an emergency service — call one of those if you
+       need one.</p>`;
 
   if (role === 'seeker') {
     return `
       <h4>You're a seeker</h4>
-      <p>Find every hider before the clock runs out. You broadcast your own
-         position constantly, so hiders who spend a power can see you coming.</p>
-      <p>Your circles are your leads: a stack of circles in the same place means
-         someone is sitting still there. A drifting line of them means someone is
-         on the move.</p>
+      <p>Find every hider before the clock runs out. Hiders cannot see you at all
+         unless they pay for it, and you cannot see them until you pay for it.
+         Charge is the whole game.</p>
+      <p>Two powers do the finding, and they work as a pair.
+         <strong>Scan</strong> is cheap and vague: a coloured glow at the edge of
+         your screen for each hider, telling you how many there are and roughly
+         which way — no distance, no dots. <strong>Probe</strong> is your big
+         spend: tap the map and a wave sweeps that entire half of the world out
+         to the boundary, putting a dot on everyone it passes. Scan first to pick
+         the half, then Probe it.</p>
+      <p><strong>Tripwires</strong> cost almost nothing and are the only exact
+         reading in the game — but you have to guess where somebody will walk.
+         Line the gates and paths.</p>
       <p>If nobody's been caught for a while, you can start a <strong>Hunt</strong> —
          you get a bearing to one hider, refreshed every 30 seconds. They get told,
          and they get a bearing back to you, so it becomes a chase.</p>
@@ -1267,16 +1177,23 @@ function howToPlayHtml(role) {
   if (role === 'hider') {
     return `
       <h4>You're a hider</h4>
-      <p>Survive. You're scored on how long you last, so there's no shame in
-         being boring — but the game punishes sitting in one spot forever,
-         because your reports pile up in the same place.</p>
-      <p>You can't see the seekers at all unless you spend a power on it.
-         That blankness is deliberate.</p>
-      <p>Two things to know that aren't obvious. <strong>Totems</strong> are
-         watchtowers seekers can drop; standing inside one gets you reported
-         anonymously. Two hiders standing at one together can destroy it.
-         And if you're being hunted, you can <strong>Snitch</strong> — sell out
-         another hider to get the seeker off you. They're never told it was you.</p>
+      <p>Survive. You're scored on how long you last. Sitting still is genuinely
+         safe now — nothing reports you for it — so the danger is not time, it is
+         a seeker deciding to spend on the half of the map you are in.</p>
+      <p>You can't see the seekers at all unless you spend on
+         <strong>Seeker scan</strong>, which pins every one of them, exactly. It
+         is expensive and it is your only window.</p>
+      <p>Your two saves are worth understanding.
+         <strong>Go quiet</strong> eats the next ping aimed at you — a wave washes
+         straight over you and reports nothing. <strong>Decoy</strong> is louder:
+         for three minutes, anything that pings you pings a fake you instead,
+         walking away on a bearing you choose. The seeker gets a real dot, in the
+         wrong place, moving.</p>
+      <p>Two things that aren't obvious. <strong>Totems</strong> are watchtowers
+         seekers can drop; standing inside one reports you anonymously and
+         exactly. Two hiders standing at one together can destroy it. And if
+         you're being hunted, you can <strong>Snitch</strong> — sell out another
+         hider to get the seeker off you. They're never told it was you.</p>
       ${common}`;
   }
 

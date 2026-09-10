@@ -11,14 +11,21 @@ native app — see the design doc for why).
 | Tier | What | State |
 |---|---|---|
 | 1 | Host/join, roles, position sync, capture, charge, timer | done |
-| 2 | Every power in design doc Section 5 | done |
+| 2 | Powers | done, then redesigned — see [The powers](#the-powers) |
 | 3 | Totems + two-player sabotage | done |
 | 4 | Hunt + Snitch | done |
 | 5 | Signposts, boundary, panic/quit | done |
 
 Also added, because the game can't resolve without them: host pause /
 resume / end-now, survival-time scoring and an end-of-game scoreboard,
-the head start, offline flagging and auto-elimination.
+the head start and hiding phase, offline flagging and auto-elimination,
+a QR to join, and a living-room mode for playing indoors.
+
+The **position system is not the design doc's.** Uncertainty circles and the
+movement/stillness trade are gone; the roster of powers is smaller and
+differently priced. What replaced them is described under
+[What a dot means](#what-a-dot-means). Everything else — totems, sabotage,
+hunts, snitching, capture, scoring — is as specified.
 
 **Not done: outdoor testing on real phones.** See
 [Before Friday](#before-friday) — this is the remaining risk, and it is
@@ -47,11 +54,11 @@ destination and your token walks there at speed. Travel time is the
 substance of the game (can you reach that totem before a seeker sweeps it?),
 so it is kept, just compressed.
 
-Everything else is identical — the same uncertainty circles, powers, totems,
-hunts, sabotage and capture. Timings are scaled by the same factor
-throughout, so the game feels proportionally the same, and the play area is
-generated so there is nothing to set up. It needs no location permission at
-all.
+Everything else is identical — the same dots, powers, totems, hunts,
+sabotage and capture. Timings are scaled by the same factor throughout
+(dot lifetimes included), so the game feels proportionally the same, and the
+play area is generated so there is nothing to set up. It needs no location
+permission at all.
 
 ## 1. Run it locally
 
@@ -119,13 +126,14 @@ backend works. `living-room.mjs` runs a browser with **no geolocation
 permission granted at all**, which is the point: the indoor game has to work
 on a device with no usable GPS.
 
-The outdoor suite drives a full five-player game and asserts 78 rules from
-the design doc:
-ping cadence and uncertainty growth, every power's effect as seen from the
-*other* player's client, totem scaling and sabotage accrual/decay, hunt
-bearings, snitch fidelity bands, boundary breach, capture, scoring, and
-that two concurrent transactions can't lose an update. Worth re-running
-after any change to `public/js/config.js`.
+The outdoor suite drives a full five-player game and asserts 87 rules:
+that nothing pings on its own, the Probe's half-world sweep and the 30m
+error on what it reports, dot colour across its ten-minute life, every
+power's effect as seen from the *other* player's client, totem scaling and
+sabotage accrual/decay, hunt bearings, snitch fidelity bands, boundary
+breach exposure, capture, scoring, and that two concurrent transactions
+can't lose an update. Worth re-running after any change to
+`public/js/config.js`.
 
 ## 2. Deploy
 
@@ -143,13 +151,66 @@ prints the URL everyone opens. `wrangler login` first if you haven't.
    map. This is worth doing properly: the area sets `M`, and every
    distance rule (totem radius, sabotage time, uncertainty cap, head
    start) scales from it. The lobby shows those numbers as you draw.
-3. Everyone else joins with the code and picks a **loadout** of 3–4 hider
-   powers (ignored if they end up a seeker).
+3. Everyone else joins with the code, or scans the QR in the lobby.
 4. Host sets the seeker count, taps **Randomly Assign Roles**, then
-   **Start Game**. Hiders get the computed head start before seekers are
-   released.
-5. Capture is a conversation, not a button: the hider reads out their
+   **Start Game**. There is nothing to pick — everyone gets their whole
+   side's powers.
+5. That starts **hiding time**, not the hunt. Seekers are held; hiders walk
+   out and tap **I'm hidden** when they're happy. Once everyone has
+   declared — or the head start runs out — the seekers are released.
+6. Capture is a conversation, not a button: the hider reads out their
    4-letter code, the seeker types it in and confirms the name.
+
+## The powers
+
+Charge is the whole game. It caps at 100 and refills at **15 a minute**, with
+a 60-second cooldown between uses. That regen rate is the pacing dial: at a
+Probe's 30, a seeker can sweep about **every two minutes**, and everything
+else is priced against that. Halve `charge.regenPerMs` and the whole game
+slows down at once.
+
+**Seekers**
+
+| Power | Cost | What it does |
+|---|---|---|
+| Tripwire | 5 | A hidden trap where you stand. A hider within 20m is reported **exactly** — the only unfuzzy reading in the game. You have to guess where they walk. |
+| Scan | 15 | One coloured glow per hider at the edge of your screen. Direction only, infinite range, no distance and no dots. The opener before a Probe. |
+| Lockout | 25 | One hider can use no power at all for 3 minutes. |
+| Probe | 30 | Tap the map: a wave sweeps that whole **180°** half of the world, out to the boundary, putting a dot on everyone it passes. Two of them cover everything, which is why it costs what it does. |
+| Totem | 60 | A permanent watchtower. Any hider inside is reported anonymously and exactly. Two hiders standing at it can destroy it. |
+
+**Hiders** — everyone gets all four; there is nothing to pick.
+
+| Power | Cost | What it does |
+|---|---|---|
+| Disarm | 15 | Destroys hidden tripwires within 50m. Spend it before a gate or a bridge. |
+| Go quiet | 20 | The next ping *aimed at you* simply fails. A wave washes over you and reports nothing. Lasts 3 minutes or until it eats one. |
+| Decoy | 35 | For 3 minutes, anything that pings you pings a fake you instead, walking off at 3 km/h on a bearing you choose. Real dots, wrong place, moving. |
+| Seeker scan | 40 | Pins every seeker on your map, exactly. Your only way of ever seeing them. |
+
+Plus **Snitch** (20), which only unlocks while you are being hunted: sell out
+another hider to the seeker chasing you. They are never told it was you.
+
+## What a dot means
+
+Nothing appears on the map by itself. Every dot was paid for by somebody.
+
+A dot is **wrong by up to 30m**, rolled fresh each time, so two readings on a
+player who has not moved an inch can land 60m apart in unrelated directions —
+and the faint smear drawn between consecutive dots can point the wrong way
+entirely. That error is the counterweight to how much ground a Probe covers.
+
+Dots age in colour: **white** at birth, shading to **bright red** over five
+minutes, then fading to nothing over five more. Your own trail is **green**,
+so you can always see exactly what you have given away.
+
+Four readings skip the error and report the truth: a **tripwire**, a
+**totem**, a hider's **Seeker scan**, and a **panic alert**. Seekers' own
+trails are never jittered either.
+
+One thing still pings for free: **leaving the boundary**. Step outside and the
+game gives your position away over and over until you come back, and nothing
+you can buy will stop it.
 
 ## Where the numbers live
 
@@ -162,13 +223,13 @@ game logic. That file is the lever for post-playtest rebalancing.
 Two places where the design doc left room, and the reading that got built:
 
 - **Totem pings report a real position.** Section 6 says the totem "pings
-  a random anonymous circle-position within its radius". Read literally as
-  a uniformly random point, the ping would carry no location information
-  at all, and the same section's note about reading "stacked vs. drifting
-  circles" would be impossible. It is built as: pick one hider currently
-  inside at random, report *their* position at base accuracy, with no
-  identity attached. So a camper produces stacked circles and someone
-  passing through produces drifting ones, which is what that note
+  a random anonymous position within its radius". Read literally as a
+  uniformly random point, the ping would carry no location information at
+  all, and the same section's note about reading stacked vs. drifting
+  readings would be impossible. It is built as: pick one hider currently
+  inside at random and report *their* position, exactly, with no identity
+  attached. So a camper produces a stack of dots and someone passing
+  through produces a drifting line of them, which is what that note
   describes.
 
 - **Sabotage requires standing at the totem centre**, within the base GPS
@@ -187,20 +248,19 @@ credit it once, not twice. Decay is computed from the gap since the last
 accrual rather than written by a timer, which means it works correctly
 even when nobody is present to run it.
 
-One behaviour fix from Tier 1: hider uncertainty was calculated at ping
-time from the gap since the *previous* ping, so a circle was at its widest
-the moment someone pinged and then stayed frozen. It now grows at render
-time from the age of the last ping, so staying still genuinely accumulates
-exposure and Go Quiet is indistinguishable from signal loss.
+Ping jitter is **display only**. `emitPing` moves the *reported* point by up
+to 30m; nothing else in the game ever reads it. Tripwire triggering,
+sabotage presence, capture range and boundary checks all run on true
+positions, so a fuzzy reading can never make a physical rule fire wrongly.
 
 ## Before Friday
 
 The automated suite covers the rules; it cannot cover GPS. Do these
 outdoors, on real phones, before the real game:
 
-- [ ] Two phones a few hundred metres apart, confirming positions and
-      uncertainty circles behave sensibly under tree cover — GPS drift
-      outdoors is the thing most likely to feel wrong
+- [ ] Two phones a few hundred metres apart, one probing the other, checking
+      the dots land somewhere believable under tree cover — GPS drift
+      outdoors stacks on top of the deliberate 30m error
 - [ ] Walk the boundary you drew, checking the warning zone triggers where
       you expect and that incidental drift doesn't start breach countdowns
 - [ ] One full capture, end to end, code read aloud

@@ -148,10 +148,10 @@ async function onSabotageComplete(participants, totem) {
   if (participants.includes(playerId)) toast('Totem destroyed. Any hunt on you is cleared.');
 }
 
-// The anonymous ping: a hider inside an active totem is reported, without
-// identity, at base accuracy. When several hiders are inside, one is picked at
-// random — which is what lets a seeker read stacked circles (someone camping)
-// apart from drifting ones (someone passing through).
+// The anonymous ping: a hider inside an active totem is reported exactly, but
+// without identity. When several hiders are inside, one is picked at random —
+// which is what lets a seeker tell a stack of dots (someone camping) from a
+// drifting line of them (someone passing through).
 async function maybeEmitTotemPing(totemId, t, now) {
   if (now - (t.lastPingAt || 0) < CONFIG.totem.pingIntervalMs) return;
   const ref = gameRef().collection('totems').doc(totemId);
@@ -170,7 +170,7 @@ async function maybeEmitTotemPing(totemId, t, now) {
     const pick = inside[Math.floor(Math.random() * inside.length)][1];
     const pings = (cur.recentPings || []).concat([{
       lat: pick.realLat, lng: pick.realLng, at: Date.now(),
-    }]).slice(-10);
+    }]).slice(-CONFIG.ping.maxStored);
 
     tx.update(ref, { lastPingAt: Date.now(), recentPings: pings });
   }).catch((e) => console.warn('totem ping', e));

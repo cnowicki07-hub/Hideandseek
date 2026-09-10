@@ -64,13 +64,13 @@ const cfg = await host.evaluate(() => ({
   gameLenCfg: CONFIG.gameLengthMin,
   cooldown: CONFIG.charge.globalCooldownMs,
   huntCooldown: CONFIG.hunt.noCaptureCooldownMs,
-  phase1: CONFIG.ping.phase1StationaryMs,
+  dotLife: CONFIG.ping.lifetimeMs,
 }));
 check('living-room mode generates its own play area', cfg.boundaryPoints === 4, `${cfg.boundaryPoints} corners`);
 check('round is compressed to about ten minutes', cfg.gameLenCfg === 10, `${cfg.gameLenCfg} min`);
 check('timers scale with the shorter round',
-  cfg.cooldown < 15000 && cfg.huntCooldown < 100000 && cfg.phase1 < 60000,
-  `cooldown ${cfg.cooldown / 1000}s, hunt ${cfg.huntCooldown / 1000}s, ping ${cfg.phase1 / 1000}s`);
+  cfg.cooldown < 15000 && cfg.huntCooldown < 100000 && cfg.dotLife < 90000,
+  `cooldown ${cfg.cooldown / 1000}s, hunt ${cfg.huntCooldown / 1000}s, dot ${cfg.dotLife / 1000}s`);
 
 for (let i = 1; i < 4; i++) {
   const p = await open(i);
@@ -88,10 +88,6 @@ await host.evaluate(() => Promise.all([
   playerRef('p2').update({ role: 'hider' }), playerRef('p3').update({ role: 'hider' }),
 ]));
 for (let i = 0; i < 4; i++) await until(pages[i], () => !!(me() && me().role));
-for (let i = 1; i < 4; i++) {
-  await pages[i].evaluate(() => playerRef().update({ loadout: ['go_quiet', 'smear', 'silent_run'] }));
-  await until(host, ([id]) => (playersState[id].loadout || []).length >= 3, ['p' + i]);
-}
 await until(host, () => !document.getElementById('btn-start-game').disabled);
 await host.click('#btn-start-game');
 await until(host, () => gameState.status === 'hiding');
@@ -147,8 +143,21 @@ await pages[0].evaluate(async () => {
   await playerRef().update({ cooldownUntil: 0, chargeCheckpoint: 100, chargeCheckpointAt: Date.now(), activePower: null });
   await activatePower('scan', {});
 });
-const scan = await pages[0].evaluate(() => reveals.scan && reveals.scan.points.length);
-check('seeker powers work indoors', typeof scan === 'number', `scan returned ${scan} hider(s)`);
+const scan = await pages[0].evaluate(() => reveals.scan && reveals.scan.bearings.length);
+check('seeker powers work indoors', typeof scan === 'number', `scan glowed for ${scan} hider(s)`);
+
+// And a paid-for reading actually lands on a token, indoors, on the shorter
+// clock — the whole point of the mode is that nothing else changes.
+await pages[0].evaluate(async () => {
+  await playerRef().update({ cooldownUntil: 0, chargeCheckpoint: 100, chargeCheckpointAt: Date.now(), activePower: null });
+  // Aim the sweep straight at a hider, so this checks the plumbing rather
+  // than where the tokens happened to scatter.
+  const hider = Object.values(playersState).find((x) => x.role === 'hider' && x.realLat != null);
+  await activatePower('probe', { point: { lat: hider.realLat, lng: hider.realLng } });
+});
+const probed = await until(host, () => Object.values(playersState)
+  .some((p) => (p.pings || []).length > 0));
+check('a probe still puts dots on the map indoors', probed === true);
 
 console.log('\n' + '='.repeat(56));
 const failed = results.filter((r) => !r.pass);
