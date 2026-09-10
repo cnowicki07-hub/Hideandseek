@@ -36,6 +36,7 @@ const BOUNDARY = [off(-300, -300), off(300, -300), off(300, 300), off(-300, 300)
 
 const results = [];
 const errors = [];
+const dialogs = [];   // expected ones exist (the panic alert), so not errors
 const skipped = [];
 function skip(name, why) {
   skipped.push({ name, why });
@@ -72,6 +73,12 @@ const pages = [];
 async function openPlayer(i, start) {
   const p = await ctx.newPage();
   p.on('pageerror', (e) => { errors.push(`${NAMES[i]}: ${e.message}`); });
+  // Playwright dismisses dialogs by default, which silently turns a confirm()
+  // into "no" and makes a blocked action look like a mystery timeout.
+  p.on('dialog', (d) => {
+    dialogs.push(`${NAMES[i]} [${d.type()}] ${d.message().split('\n')[0]}`);
+    d.dismiss().catch(() => {});
+  });
   p.on('console', (m) => { if (m.type() === 'error') errors.push(`${NAMES[i]} console: ${m.text()}`); });
   // mock=1 pins the suite to the offline harness. Without it, now that real
   // credentials are in firebase-config.js, every run would write test games
@@ -79,6 +86,21 @@ async function openPlayer(i, start) {
   await p.goto(`${ORIGIN}/?${STORE_PARAM}pid=p${i}&sim=${start.lat},${start.lng}`);
   pages.push(p);
   return p;
+}
+
+
+// Position writes are throttled (CONFIG.sync), so a teleport is not broadcast
+// the instant it happens. Wait for it to actually land on another client
+// rather than guessing a sleep — this is the difference between testing the
+// game and testing the network.
+async function teleport(idx, pos) {
+  await pages[idx].evaluate((p) => window.__sim.setPos(p.lat, p.lng), pos);
+  const landed = await until(host, ([id, target]) => {
+    const p = playersState[id];
+    if (!p || p.realLat == null) return false;
+    return distanceM({ lat: p.realLat, lng: p.realLng }, target) < 3;
+  }, ['p' + idx, pos], 20000);
+  if (!landed) console.log(`  (warn) teleport of p${idx} did not propagate`);
 }
 
 // ---- host creates the game ----
@@ -274,7 +296,7 @@ check('silent run keeps the stationary cadence while moving',
   `${cadence.withSilent / 1000}s vs ${cadence.withoutSilent / 1000}s`);
 
 // -- Scan: exact positions of hiders within 100m --
-await pages[1].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(-100, 40));
+await teleport(1, off(-100, 40));
 await host.waitForTimeout(1200);
 await runPower(1, 'scan');
 const scan = await pages[1].evaluate(() => ({
@@ -336,7 +358,7 @@ const sweepWhileDark = await pages[2].evaluate(() => {
   return Object.values(playersState).filter((p) =>
     p.role === 'seeker' && p.status === 'active' && p.realLat && !isSeekerDark(p, now)).length;
 });
-await pages[2].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(-100, 40));
+await teleport(2, off(-100, 40));
 await host.waitForTimeout(1200);
 await runPower(2, 'uncloak');
 const afterUncloak = await until(host, () => {
@@ -354,7 +376,7 @@ check('uncloak forces a nearby dark seeker back into broadcast',
   `${sweepWhileDark} seeker(s) visible to the hider while dark`);
 
 // -- Beacon + contagion --
-await pages[3].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(-100, 45));
+await teleport(3, off(-100, 45));
 await host.waitForTimeout(1000);
 await runPower(1, 'beacon', { targetId: 'p2' });
 const beaconed = await until(host, () => playersState.p2.beaconedUntil > Date.now());
@@ -367,14 +389,14 @@ await host.evaluate(() => Promise.all([
 ]));
 
 // -- Tripwire + Disarm --
-await pages[1].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 200));
+await teleport(1, off(0, 200));
 await host.waitForTimeout(1000);
 await runPower(1, 'tripwire');
 await host.waitForTimeout(500);
 const twCount = await host.evaluate(() => Object.keys(tripwiresState).length);
 check('tripwire is placed', twCount === 1);
 
-await pages[4].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 195));
+await teleport(4, off(0, 195));
 const tripped = await until(host, () => {
   const tw = Object.values(tripwiresState)[0];
   return !!(tw && tw.triggered);
@@ -383,7 +405,7 @@ check('a hider walking within 20m trips the wire', tripped === true);
 
 await runPower(1, 'tripwire');
 await host.waitForTimeout(400);
-await pages[4].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 210));
+await teleport(4, off(0, 210));
 await host.waitForTimeout(1200);
 await runPower(4, 'disarm');
 await host.waitForTimeout(500);
@@ -416,7 +438,7 @@ check('sabotage time is radius/25 minutes',
   `${(totem.requiredS / 60).toFixed(1)} min`);
 
 // A hider inside the radius triggers an anonymous ping.
-await pages[2].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(30, 30));
+await teleport(2, off(30, 30));
 await until(host, () => (Object.values(totemsState)[0].recentPings || []).length >= 1);
 const pinged = await host.evaluate(() => Object.values(totemsState)[0].recentPings || []);
 check('totem pings anonymously while a hider is inside', pinged.length >= 1,
@@ -428,7 +450,7 @@ const anonymous = await host.evaluate(() => {
 check('totem ping carries no identity', anonymous === true);
 
 // One hider alone: no progress.
-await pages[2].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 3));
+await teleport(2, off(0, 3));
 await host.waitForTimeout(6000);
 const soloProgress = await host.evaluate(() => Object.values(totemsState)[0].sabotageProgressS || 0);
 check('one hider alone accrues no sabotage progress', soloProgress === 0);
@@ -439,7 +461,7 @@ const waitingFlag = await pages[3].evaluate(() => {
 check('other hiders can see one hider waiting at the totem', waitingFlag === 1);
 
 // Second hider arrives: progress accrues, totem greys out.
-await pages[3].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(2, -2));
+await teleport(3, off(2, -2));
 await until(host, () => (Object.values(totemsState)[0].sabotageProgressS || 0) > 2, null, 20000);
 const joint = await host.evaluate(() => {
   const t = Object.values(totemsState)[0];
@@ -451,7 +473,7 @@ check('totem greys out for everyone while being sabotaged', joint.sabotaging ===
   `${joint.present} present`);
 
 // One leaves: progress decays at half rate.
-await pages[3].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(200, 200));
+await teleport(3, off(200, 200));
 await host.waitForTimeout(9000);
 const decayed = await host.evaluate(() => {
   const t = Object.values(totemsState)[0];
@@ -463,7 +485,7 @@ check('progress decays at half rate once a participant leaves',
 check('totem stops showing as sabotaged when the pair breaks up', decayed.sabotaging === false);
 
 // Force completion to check destruction + hunt clearing.
-await pages[3].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(2, -2));
+await teleport(3, off(2, -2));
 await host.waitForTimeout(1500);
 await host.evaluate(async () => {
   const [id, t] = Object.entries(totemsState)[0];
@@ -546,8 +568,8 @@ check('snitch is unavailable when not hunted',
 
 await pages[2].evaluate(() => playerRef().update({ cooldownUntil: 0, chargeCheckpoint: 100, chargeCheckpointAt: Date.now() }));
 await host.waitForTimeout(300);
-await pages[4].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 50));   // ~47m => exact
-await pages[3].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 250));  // ~247m => 50m circle
+await teleport(4, off(0, 50));   // ~47m => exact
+await teleport(3, off(0, 250));  // ~247m => 50m circle
 await host.waitForTimeout(1500);
 const survey = await pages[2].evaluate(() => snitchSurvey().map((e) => ({ name: e.name, r: e.radiusM, d: Math.round(e.dist) })));
 check('snitch survey bands fidelity by range',
@@ -599,7 +621,7 @@ check('signposts are anonymous to readers but attributable internally',
   signAnonymous.hasText && signAnonymous.authorStored);
 
 // Boundary breach.
-await pages[4].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 500));
+await teleport(4, off(0, 500));
 await until(host, () => !!playersState.p4.breachStartedAt, null, 25000);
 const breach = await host.evaluate(() => ({
   readings: playersState.p4.outOfBoundsReadings,
@@ -617,7 +639,7 @@ const exposed = await until(host, () => {
 });
 check('a breaching hider pings their true position continuously', exposed === true);
 
-await pages[4].evaluate((pos) => window.__sim.setPos(pos.lat, pos.lng), off(0, 100));
+await teleport(4, off(0, 100));
 await host.waitForTimeout(6000);
 const recovered = await host.evaluate(() => !playersState.p4.breachStartedAt);
 check('returning inside cancels the countdown', recovered === true);
@@ -702,6 +724,7 @@ if (realErrors.length) {
 } else {
   console.log('\nNo JS errors.');
 }
+if (dialogs.length) console.log(`Dialogs seen (expected): ${dialogs.length}`);
 
 await browser.close();
 if (!BASE_URL) server.close();

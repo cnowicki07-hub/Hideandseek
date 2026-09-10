@@ -62,7 +62,9 @@ function me() { return playersState[playerId]; }
 // ---------- Host: create game ----------
 
 async function hostCreateGame(opts) {
-  gameCode = newGameCode();
+  // A rematch reserves its code on the old game before switching, so the code
+  // can be passed in rather than generated here.
+  gameCode = opts.code || newGameCode();
   // Each game is its own Durable Object, so the store can't be opened until
   // there is a code to address.
   await initStore(gameCode);
@@ -103,6 +105,8 @@ async function joinGame(code, name, isHost) {
   if (!gameSnap.exists) { alert('Game code not found.'); return false; }
   const gameData = gameSnap.data();
   M = gameData.M;
+
+  rememberName(name);
 
   const existing = await playerRef().get();
   if (existing.exists) {
@@ -540,6 +544,56 @@ async function sendPanic(message) {
     message: (message || '').trim() || null, createdAt: now,
   });
   await endPlayer(playerId, 'panicked');
+}
+
+function rememberName(name) {
+  try { localStorage.setItem('h_name', name); } catch (e) { /* private mode */ }
+}
+
+function rememberedName() {
+  try { return localStorage.getItem('h_name') || ''; } catch (e) { return ''; }
+}
+
+// Reload into a given game. Each game is a separate Durable Object and the
+// client keeps a lot of per-game state, so a reload is both the simplest and
+// the most reliable way to switch — nothing can leak between rounds.
+function goToGame(code) {
+  const params = new URLSearchParams(location.search);
+  params.set('join', code);
+  location.search = params.toString();
+}
+
+function backToStart() {
+  const params = new URLSearchParams(location.search);
+  params.delete('join');
+  location.search = params.toString();
+}
+
+// Host only: reserve the next game's code on this one so everybody can follow,
+// then create it with the same settings. Reusing the boundary matters — it is
+// the tedious part to redraw, and it keeps the scaling identical between
+// rounds.
+async function createNextGame() {
+  const old = gameState || {};
+  const nextCode = newGameCode();
+
+  // Captured before the store switches. A document ref keeps its own backend,
+  // so this still writes to the *old* game's Durable Object afterwards — which
+  // matters, because the pointer must only appear once the new game actually
+  // exists, or a quick follower would try to join nothing.
+  const oldGameRef = gameRef();
+
+  await hostCreateGame({
+    code: nextCode,
+    boundary: old.boundary || null,
+    areaM2: old.areaM2,
+    gameLengthMin: old.gameLengthMin,
+    endConditionMode: old.endConditionMode,
+    headstartMs: old.headstartMs,
+  });
+
+  await oldGameRef.update({ nextGameCode: nextCode });
+  return nextCode;
 }
 
 async function pauseGame() { await gameRef().update({ pausedAt: Date.now() }); }

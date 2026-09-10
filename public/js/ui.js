@@ -4,6 +4,31 @@
 // but themselves and the shared world (boundary, totems, cordons, signposts).
 // Powers are what punch temporary holes in that — see `reveals` in powers.js.
 
+// Map palette, kept in step with css/style.css. Anything that threatens you
+// is blood; the world is bruised and sickly; you are the one cold blue dot.
+const MAP = {
+  blood:      '#e01b26',
+  bloodDim:   '#8c0a12',
+  boundary:   '#7a1018',
+  bruise:     '#7a2f52',
+  rot:        '#6f9150',
+  rotLit:     '#8fbf6a',
+  totem:      '#5f7f4a',
+  totemLit:   '#7ea35e',
+  ash:        '#5a5454',
+  ashLit:     '#8a8280',
+  gloom:      '#3a2f35',
+  ember:      '#c9741f',
+  bone:       '#ddd6ce',
+  amber:      '#d9a441',
+  amberLit:   '#f0c96a',
+  cold:       '#5fa8d3',
+  coldDim:    '#2f6f92',
+  wood:       '#6b5638',
+  woodLit:    '#9a825a',
+  violet:     '#8e5fa8',
+};
+
 let currentPlayerName = '';
 let worldLayer = null;
 let selfMarker = null;
@@ -51,6 +76,14 @@ function recenterOnSelf(lat, lng) {
   if (!recentered) { map.setView([lat, lng], 17); recentered = true; }
 }
 
+// The map follows you once, on the first fix, and then leaves you alone so
+// you can pan around. This is how you get back.
+el('btn-locate').onclick = () => {
+  if (!mapReady) return;
+  if (!myPos) { toast('No GPS fix yet.'); return; }
+  map.setView([myPos.lat, myPos.lng], Math.max(map.getZoom(), 17));
+};
+
 // ---------- landing ----------
 
 el('btn-host').onclick = async () => {
@@ -65,10 +98,7 @@ el('btn-host').onclick = async () => {
     });
   } catch (e) { storeConnectionFailed(e); return; }
   el('lobby-code').textContent = gameCode;
-  el('host-controls').style.display = 'block';
   showView('view-lobby');
-  renderLoadoutPicker();
-  initBoundaryMap();
 };
 
 el('btn-join').onclick = async () => {
@@ -81,7 +111,6 @@ el('btn-join').onclick = async () => {
   if (ok) {
     el('lobby-code').textContent = gameCode;
     showView('view-lobby');
-    renderLoadoutPicker();
   }
 };
 
@@ -116,8 +145,8 @@ function drawBoundaryDraft() {
   if (!boundaryPoints.length) { boundaryShape = null; updateBoundaryInfo(); return; }
   const latlngs = boundaryPoints.map((p) => [p.lat, p.lng]);
   boundaryShape = boundaryPoints.length >= 3
-    ? L.polygon(latlngs, { color: '#e67e22', weight: 2 })
-    : L.polyline(latlngs, { color: '#e67e22', weight: 2 });
+    ? L.polygon(latlngs, { color: MAP.boundary, weight: 2 })
+    : L.polyline(latlngs, { color: MAP.boundary, weight: 2 });
   boundaryShape.addTo(boundaryMap);
   updateBoundaryInfo();
 }
@@ -134,6 +163,14 @@ function updateBoundaryInfo() {
     `totem radius ${Math.round(totemRadiusM(mVal))}m · ` +
     `sabotage ${(totemSabotageSeconds(totemRadiusM(mVal)) / 60).toFixed(1)} min`;
 }
+
+el('btn-boundary-locate').onclick = () => {
+  if (!navigator.geolocation) { toast('No GPS on this device.'); return; }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => boundaryMap.setView([pos.coords.latitude, pos.coords.longitude], 17),
+    () => toast('Could not get your location — check location permission.'),
+    { enableHighAccuracy: true, timeout: 10000 });
+};
 
 el('btn-boundary-undo').onclick = () => { boundaryPoints.pop(); drawBoundaryDraft(); };
 el('btn-boundary-clear').onclick = () => { boundaryPoints = []; drawBoundaryDraft(); };
@@ -229,8 +266,11 @@ el('btn-assign-roles').onclick = async () => {
 };
 
 el('btn-start-game').onclick = async () => {
-  const unassigned = Object.values(playersState).some((p) => !p.role);
-  if (unassigned && !confirm('Some players have no role yet. Start anyway?')) return;
+  const all = Object.values(playersState);
+  if (all.some((p) => !p.role) && !confirm('Some players have no role yet. Start anyway?')) return;
+  const waiting = all.filter((p) => p.role === 'hider' && (!p.loadout || p.loadout.length < 3));
+  if (waiting.length &&
+      !confirm(`${waiting.map((p) => p.name).join(', ')} haven't finished choosing powers. Start anyway?`)) return;
   await startGame();
 };
 
@@ -242,9 +282,64 @@ function renderLobbyList(players) {
     const bits = [p.name];
     if (p.isHost) bits.push('(host)');
     if (p.role) bits.push('— ' + p.role);
+    if (p.role === 'hider' && p.loadout && p.loadout.length >= 3) bits.push('✓');
     li.textContent = bits.join(' ');
     list.appendChild(li);
   });
+}
+
+// The lobby runs in order: everyone joins, the host assigns roles, and only
+// then do hiders choose powers — picking a loadout before you know whether
+// you're even a hider is meaningless.
+function renderLobby(players) {
+  const p = players[playerId];
+  if (!p) return;
+  renderLobbyList(players);
+
+  // Driven by the player document rather than set once at host time, so a
+  // rematch host still gets their controls after the page reloads.
+  el('host-controls').style.display = p.isHost ? 'block' : 'none';
+  if (p.isHost) initBoundaryMap();
+
+  const title = el('role-title');
+  const note = el('role-note');
+  const loadout = el('loadout-card');
+
+  if (!p.role) {
+    title.textContent = 'Waiting for roles';
+    note.textContent = 'The host assigns roles once everyone has joined. You pick your powers after that.';
+    loadout.style.display = 'none';
+  } else if (p.role === 'seeker') {
+    title.textContent = "You're a SEEKER";
+    note.textContent = 'Seekers all share the same powers, so there is nothing to choose. Sit tight.';
+    loadout.style.display = 'none';
+  } else {
+    title.textContent = "You're a HIDER";
+    note.textContent = 'Choose what you want to carry. You cannot change it once the game starts.';
+    loadout.style.display = 'block';
+    renderLoadoutPicker();
+  }
+
+  if (p.isHost) renderHostLobbyStatus(players);
+}
+
+function renderHostLobbyStatus(players) {
+  const all = Object.values(players);
+  const assigned = all.filter((x) => x.role).length;
+  const seekers = all.filter((x) => x.role === 'seeker').length;
+  const hiders = all.filter((x) => x.role === 'hider');
+
+  el('roles-status').textContent = assigned
+    ? `${seekers} seeker(s), ${hiders.length} hider(s).`
+    : `${all.length} player(s) here. Nobody has a role yet.`;
+
+  const waiting = hiders.filter((h) => !h.loadout || h.loadout.length < 3);
+  el('btn-start-game').disabled = assigned === 0;
+  el('ready-status').textContent = !assigned
+    ? 'Assign roles before starting.'
+    : waiting.length
+      ? `Still choosing powers: ${waiting.map((h) => h.name).join(', ')}.`
+      : 'Everyone has chosen their powers.';
 }
 
 // ---------- game status ----------
@@ -269,6 +364,7 @@ function renderGameStatus(g) {
   if (g.status === 'ended') {
     showView('view-end');
     renderScoreboard();
+    renderEndActions();
   }
 }
 
@@ -297,7 +393,7 @@ function renderPlayers(players) {
     buildActionButtons();
   }
 
-  renderLobbyList(players);
+  if (!gameState || gameState.status === 'lobby') renderLobby(players);
   refreshHud();
 
   if (!el('view-game').classList.contains('active') || !mapReady) return;
@@ -703,7 +799,7 @@ function renderWorld() {
   // Boundary — everyone.
   if (gameState && gameState.boundary && gameState.boundary.length >= 3) {
     add(L.polygon(gameState.boundary.map((q) => [q.lat, q.lng]), {
-      color: '#e67e22', weight: 2, fill: false, dashArray: '6 6',
+      color: MAP.boundary, weight: 2, fill: false, dashArray: '6 6',
     }));
   }
 
@@ -711,7 +807,7 @@ function renderWorld() {
   Object.values(cordonsState).forEach((c) => {
     if (now >= c.expiresAt) return;
     add(L.circle([c.lat, c.lng], {
-      radius: c.radiusM, color: '#8e44ad', fillColor: '#8e44ad',
+      radius: c.radiusM, color: MAP.bruise, fillColor: MAP.bruise,
       fillOpacity: 0.12, weight: 2,
     }).bindTooltip('Cordon'));
   });
@@ -722,18 +818,18 @@ function renderWorld() {
     const sabotaging = isBeingSabotaged(t, now);
     add(L.circle([t.lat, t.lng], {
       radius: t.radiusM,
-      color: sabotaging ? '#7f8c8d' : '#16a085',
-      fillColor: sabotaging ? '#95a5a6' : '#1abc9c',
+      color: sabotaging ? MAP.ash : MAP.totem,
+      fillColor: sabotaging ? MAP.ashLit : MAP.totemLit,
       fillOpacity: sabotaging ? 0.08 : 0.15, weight: 2,
     }));
     add(L.circleMarker([t.lat, t.lng], {
-      radius: 6, color: sabotaging ? '#7f8c8d' : '#16a085',
-      fillColor: sabotaging ? '#bdc3c7' : '#1abc9c', fillOpacity: 1,
+      radius: 6, color: sabotaging ? MAP.ash : MAP.totem,
+      fillColor: sabotaging ? MAP.ashLit : MAP.totemLit, fillOpacity: 1,
     }).bindTooltip(totemTooltip(id, t, p, now)));
     // Precision ring: where you have to stand to sabotage.
     if (p.role === 'hider') {
       add(L.circle([t.lat, t.lng], {
-        radius: totemPrecisionRadiusM(), color: '#16a085',
+        radius: totemPrecisionRadiusM(), color: MAP.totem,
         weight: 1, dashArray: '3 4', fill: false,
       }));
     }
@@ -747,7 +843,7 @@ function renderWorld() {
         if (ageMs > 3 * 60000) return;
         add(L.circle([ping.lat, ping.lng], {
           radius: CONFIG.baseAccuracyRadiusM,
-          color: '#d35400', fillColor: '#e67e22',
+          color: MAP.ember, fillColor: MAP.ember,
           fillOpacity: Math.max(0.08, 0.35 - ageMs / 600000), weight: 1,
         }).bindTooltip('Totem contact'));
       });
@@ -757,7 +853,7 @@ function renderWorld() {
   // Signposts — everyone, but only readable within range.
   Object.values(signpostsState).forEach((s) => {
     add(L.circleMarker([s.lat, s.lng], {
-      radius: 4, color: '#795548', fillColor: '#a1887f', fillOpacity: 1,
+      radius: 4, color: MAP.wood, fillColor: MAP.woodLit, fillOpacity: 1,
     }));
   });
 
@@ -766,7 +862,7 @@ function renderWorld() {
     if (tw.placedBy !== playerId) return;
     add(L.circle([tw.lat, tw.lng], {
       radius: CONFIG.seekerPowers.tripwire.triggerRadiusM,
-      color: tw.triggered ? '#7f8c8d' : '#2c3e50',
+      color: tw.triggered ? MAP.ash : MAP.gloom,
       fill: false, weight: 1, dashArray: '2 4',
     }).bindTooltip(tw.triggered ? 'Tripwire (sprung)' : 'Tripwire'));
   });
@@ -780,7 +876,7 @@ function renderWorld() {
   panicAlerts.forEach((e) => {
     if (e.lat == null) return;
     add(L.circleMarker([e.lat, e.lng], {
-      radius: 10, color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 1,
+      radius: 10, color: MAP.blood, fillColor: MAP.bloodDim, fillOpacity: 1,
     }).bindTooltip(`PANIC: ${e.name}`, { permanent: true }));
   });
 
@@ -788,7 +884,7 @@ function renderWorld() {
   if (p.realLat) {
     if (!selfMarker) {
       selfMarker = L.circleMarker([p.realLat, p.realLng], {
-        radius: 8, color: '#2980b9', fillColor: '#3498db', fillOpacity: 1,
+        radius: 8, color: MAP.cold, fillColor: MAP.coldDim, fillOpacity: 1,
       }).addTo(map);
     } else {
       selfMarker.setLatLng([p.realLat, p.realLng]);
@@ -833,7 +929,7 @@ function renderForSeeker(p, now, add) {
     // A beaconed hider is lit up exactly and continuously.
     if (other.beaconedUntil && now < other.beaconedUntil && other.realLat) {
       add(L.circleMarker([other.realLat, other.realLng], {
-        radius: 9, color: '#f39c12', fillColor: '#f1c40f', fillOpacity: 0.9,
+        radius: 9, color: MAP.amber, fillColor: MAP.amberLit, fillOpacity: 0.9,
       }).bindTooltip(`${other.name} (beaconed)`, { permanent: true, direction: 'top' }));
       return;
     }
@@ -844,14 +940,14 @@ function renderForSeeker(p, now, add) {
       const a = other.broadcastArc;
       add(L.polygon(arcPolygon({ lat: other.broadcastLat, lng: other.broadcastLng },
         a.bearing, a.halfWidthDeg, a.radiusM), {
-        color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.15, weight: 1,
+        color: MAP.blood, fillColor: MAP.bloodDim, fillOpacity: 0.15, weight: 1,
       }).bindTooltip(`${other.name} (smeared)`));
       return;
     }
 
     const radius = displayRadiusM(other, now);
     add(L.circle([other.broadcastLat, other.broadcastLng], {
-      radius, color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.22, weight: 1,
+      radius, color: MAP.blood, fillColor: MAP.bloodDim, fillOpacity: 0.22, weight: 1,
     }).bindTooltip(`${other.name} · ${Math.round(radius)}m · ${Math.round((now - other.broadcastAt) / 1000)}s ago`));
   });
 }
@@ -865,11 +961,11 @@ function renderForHider(p, now, add) {
     if (other.role !== 'seeker' || other.status !== 'active' || !other.realLat) return;
     if (isSeekerDark(other, now)) return;
     add(L.circle([other.realLat, other.realLng], {
-      radius: coverage, color: '#2c3e50', fillColor: '#34495e',
+      radius: coverage, color: MAP.gloom, fillColor: MAP.gloom,
       fillOpacity: 0.18, weight: 1,
     }));
     add(L.circleMarker([other.realLat, other.realLng], {
-      radius: 6, color: '#2c3e50', fillColor: '#7f8c8d', fillOpacity: 1,
+      radius: 6, color: MAP.gloom, fillColor: MAP.ashLit, fillOpacity: 1,
     }).bindTooltip(other.name));
   });
 }
@@ -879,18 +975,18 @@ function renderReveals(p, now, add) {
     reveals.scan.points.forEach((pt) => {
       if (pt.radiusM) {
         add(L.circle([pt.lat, pt.lng], {
-          radius: pt.radiusM, color: '#27ae60', fillColor: '#2ecc71',
+          radius: pt.radiusM, color: MAP.rot, fillColor: MAP.rotLit,
           fillOpacity: 0.25, weight: 2,
         }).bindTooltip(pt.name, { permanent: true, direction: 'top' }));
       } else {
         add(L.circleMarker([pt.lat, pt.lng], {
-          radius: 9, color: '#27ae60', fillColor: '#2ecc71', fillOpacity: 0.9,
+          radius: 9, color: MAP.rot, fillColor: MAP.rotLit, fillOpacity: 0.9,
         }).bindTooltip(pt.name, { permanent: true, direction: 'top' }));
       }
     });
     if (reveals.scan.origin) {
       add(L.circle([reveals.scan.origin.lat, reveals.scan.origin.lng], {
-        radius: reveals.scan.radiusM, color: '#27ae60', fill: false, weight: 1, dashArray: '4 4',
+        radius: reveals.scan.radiusM, color: MAP.rot, fill: false, weight: 1, dashArray: '4 4',
       }));
     }
   }
@@ -898,8 +994,8 @@ function renderReveals(p, now, add) {
   if (revealActive('probe', now)) {
     add(L.circle([reveals.probe.lat, reveals.probe.lng], {
       radius: reveals.probe.radiusM,
-      color: reveals.probe.hit ? '#27ae60' : '#7f8c8d',
-      fillColor: reveals.probe.hit ? '#2ecc71' : '#bdc3c7',
+      color: reveals.probe.hit ? MAP.rot : MAP.ash,
+      fillColor: reveals.probe.hit ? MAP.rotLit : MAP.ashLit,
       fillOpacity: 0.2, weight: 2,
     }).bindTooltip(reveals.probe.hit ? 'Hider present' : 'Empty'));
   }
@@ -909,14 +1005,14 @@ function renderReveals(p, now, add) {
     const from = { lat: b.lat, lng: b.lng };
     const to = destinationPoint(from, b.bearing, Math.max(150, 0.1 * M));
     add(L.polyline([[from.lat, from.lng], [to.lat, to.lng]], {
-      color: '#2980b9', weight: 3, dashArray: '8 5',
+      color: MAP.cold, weight: 3, dashArray: '8 5',
     }).bindTooltip(`${b.name} heading ${Math.round(b.bearing)}°`));
   }
 
   if (revealActive('disarm', now)) {
     reveals.disarm.points.forEach((pt) => {
       add(L.circleMarker([pt.lat, pt.lng], {
-        radius: 7, color: '#7f8c8d', fillColor: '#ecf0f1', fillOpacity: 0.9,
+        radius: 7, color: MAP.ash, fillColor: MAP.bone, fillOpacity: 0.9,
       }).bindTooltip('Tripwire destroyed'));
     });
   }
@@ -925,12 +1021,12 @@ function renderReveals(p, now, add) {
     reveals.snitch.entries.forEach((e) => {
       if (e.radiusM) {
         add(L.circle([e.lat, e.lng], {
-          radius: e.radiusM, color: '#9b59b6', fillColor: '#8e44ad',
+          radius: e.radiusM, color: MAP.violet, fillColor: MAP.violet,
           fillOpacity: 0.2, weight: 2,
         }).bindTooltip(e.name, { permanent: true, direction: 'top' }));
       } else {
         add(L.circleMarker([e.lat, e.lng], {
-          radius: 8, color: '#9b59b6', fillColor: '#8e44ad', fillOpacity: 0.9,
+          radius: 8, color: MAP.violet, fillColor: MAP.violet, fillOpacity: 0.9,
         }).bindTooltip(e.name, { permanent: true, direction: 'top' }));
       }
     });
@@ -947,7 +1043,7 @@ function renderReveals(p, now, add) {
       if (!reading) return;
       add(L.polygon(arcPolygon({ lat: p.realLat, lng: p.realLng },
         reading.bearing, reading.coneHalfWidthDeg, Math.max(200, 0.2 * M)), {
-        color: '#c0392b', fillColor: '#e74c3c', fillOpacity: 0.1,
+        color: MAP.blood, fillColor: MAP.bloodDim, fillOpacity: 0.1,
         weight: 1, dashArray: '5 5',
       }));
     });
@@ -964,6 +1060,45 @@ const OUTCOME_LABEL = {
   quit: 'withdrew',
   panicked: 'panic',
 };
+
+function renderEndActions() {
+  const p = me();
+  const nextCode = gameState && gameState.nextGameCode;
+  const btn = el('btn-next-game');
+  const note = el('next-game-note');
+
+  if (nextCode) {
+    btn.textContent = 'Join the next round';
+    btn.disabled = false;
+    btn.onclick = () => goToGame(nextCode);
+    note.textContent = `The host has opened a new round — code ${nextCode}.`;
+    return;
+  }
+
+  if (p && p.isHost) {
+    btn.textContent = 'Play again';
+    btn.disabled = false;
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = 'Setting up…';
+      try {
+        goToGame(await createNextGame());
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Play again';
+        toast('Could not start another round.');
+      }
+    };
+    note.textContent = 'Same boundary and settings. Everyone else gets a button to follow you in.';
+    return;
+  }
+
+  btn.textContent = 'Waiting for the host';
+  btn.disabled = true;
+  note.textContent = 'The host can open another round from this screen.';
+}
+
+el('btn-back-start').onclick = backToStart;
 
 function renderScoreboard() {
   const list = el('scoreboard');
@@ -1003,3 +1138,19 @@ function renderScoreboard() {
 }
 
 showView('view-landing');
+
+// A rematch link carries ?join=CODE. The name is remembered from last time so
+// nobody has to retype it between rounds.
+(function autoJoinFromUrl() {
+  const code = new URLSearchParams(location.search).get('join');
+  if (!code) return;
+  currentPlayerName = rememberedName() || 'Player';
+  el('input-name-join').value = currentPlayerName;
+  joinGame(code, currentPlayerName, false)
+    .then((ok) => {
+      if (!ok) return;
+      el('lobby-code').textContent = gameCode;
+      showView('view-lobby');
+    })
+    .catch(storeConnectionFailed);
+})();

@@ -11,7 +11,8 @@
 
 <!-- LANDING -->
 <div id="view-landing" class="view active">
-  <h1>Hide &amp; Seek</h1>
+  <h1>Come out<br>come out<br>wherever you are</h1>
+  <p class="tagline">Hide &amp; Seek</p>
 
   <div class="card">
     <h2>Host a game</h2>
@@ -43,9 +44,15 @@
   <p class="muted">Give this code to everyone joining.</p>
   <ul id="lobby-players"></ul>
 
-  <div class="card" id="loadout-card">
-    <h2>Your loadout</h2>
-    <p class="muted">Hiders pick 3–4 powers. Ignored if you end up a seeker.</p>
+  <div class="card" id="role-card">
+    <h2 id="role-title">Waiting for roles</h2>
+    <p class="muted" id="role-note">The host assigns roles once everyone has joined.
+      You pick your powers after that.</p>
+  </div>
+
+  <div class="card" id="loadout-card" style="display:none">
+    <h2>Choose your powers</h2>
+    <p class="muted">Pick 3–4. These are yours for the whole game.</p>
     <div id="loadout-options"></div>
     <p class="muted" id="loadout-count"></p>
   </div>
@@ -57,22 +64,29 @@
         which drives every distance rule in the game.</p>
       <div id="boundary-map"></div>
       <div class="row">
+        <button id="btn-boundary-locate" class="secondary">Find me</button>
         <button id="btn-boundary-undo" class="secondary">Undo</button>
         <button id="btn-boundary-clear" class="secondary">Clear</button>
-        <button id="btn-boundary-save">Use this boundary</button>
       </div>
+      <button id="btn-boundary-save">Use this boundary</button>
       <p class="muted" id="boundary-info">No boundary drawn — using the square area you entered.</p>
     </div>
 
     <div class="card">
-      <h2>Start</h2>
+      <h2>1. Assign roles</h2>
       <label>Number of seekers</label>
       <input id="input-num-seekers" type="number" value="1" min="1">
       <button id="btn-assign-roles" class="secondary">Randomly Assign Roles</button>
+      <p class="muted" id="roles-status"></p>
+    </div>
+
+    <div class="card">
+      <h2>2. Start</h2>
       <label>Head start (minutes) — computed from the boundary, override if you like</label>
       <input id="input-headstart" type="number" min="0" step="0.5">
       <p class="muted" id="headstart-info"></p>
-      <button id="btn-start-game">Start Game</button>
+      <p class="muted" id="ready-status"></p>
+      <button id="btn-start-game" disabled>Start Game</button>
     </div>
   </div>
 </div>
@@ -93,6 +107,7 @@
     <div id="action-buttons"></div>
   </div>
 
+  <button id="btn-locate" class="locate-fab" title="Centre the map on me">◎</button>
   <button id="btn-panic" class="panic-fab">PANIC<br><span>hold</span></button>
   <div id="targeting-prompt" class="targeting-prompt"></div>
   <div id="toast-host"></div>
@@ -183,6 +198,13 @@
   <h1>Game Over</h1>
   <p id="end-summary" class="muted"></p>
   <ol id="scoreboard" class="scoreboard"></ol>
+
+  <div class="card">
+    <h2>Another round?</h2>
+    <p class="muted" id="next-game-note"></p>
+    <button id="btn-next-game">Play again</button>
+    <button id="btn-back-start" class="secondary">Back to the start</button>
+  </div>
 </div>
 
 <script src="vendor/leaflet/leaflet.js"></script>
