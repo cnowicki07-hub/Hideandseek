@@ -19,6 +19,12 @@
   <div class="card">
     <h2>Host a game</h2>
     <input id="input-name-host" placeholder="Your name">
+    <label>Where are you playing?</label>
+    <select id="input-mode">
+      <option value="outdoor">Outdoors — real walking, real GPS</option>
+      <option value="livingroom">Living room — on screen, about 10 minutes</option>
+    </select>
+    <p class="muted" id="mode-note">Played on foot across a real area you draw on the map.</p>
     <label>Play area (metres, square side) — refine by drawing a boundary next</label>
     <input id="input-area-side" type="number" value="400">
     <label>Game length (minutes)</label>
@@ -255,6 +261,7 @@
 
 <script src="js/config.js"></script>
 <script src="js/geo.js"></script>
+<script src="js/travel.js"></script>
 <script src="js/app.js"></script>
 <script src="js/powers.js"></script>
 <script src="js/world.js"></script>

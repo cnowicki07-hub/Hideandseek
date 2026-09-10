@@ -126,6 +126,18 @@ function polygonCentroid(points) {
   return { lat, lng };
 }
 
+// A square boundary of a given side around a centre — used by living-room
+// mode, where the host has no real ground to draw over.
+function squareBoundaryAround(centre, sideM) {
+  const h = sideM / 2;
+  return [
+    destinationPoint(destinationPoint(centre, 0, h), 270, h),
+    destinationPoint(destinationPoint(centre, 0, h), 90, h),
+    destinationPoint(destinationPoint(centre, 180, h), 90, h),
+    destinationPoint(destinationPoint(centre, 180, h), 270, h),
+  ];
+}
+
 // Vertices of a pie wedge, for rendering a Smear arc.
 function arcPolygon(center, bearing, halfWidthDeg, radiusM, steps) {
   const pts = [[center.lat, center.lng]];

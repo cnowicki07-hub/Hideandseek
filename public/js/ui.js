@@ -69,6 +69,11 @@ function renderLocationStatus() {
   const status = el('location-status');
   const retry = el('btn-retry-location');
   if (!status) return;
+  if (usingTravelMode()) {
+    el('location-card').style.display = 'none';
+    return;
+  }
+  el('location-card').style.display = 'block';
   if (locationState === 'ok') {
     status.textContent = myPos
       ? 'Location on. You are being tracked.'
@@ -87,6 +92,16 @@ function renderLocationStatus() {
     retry.style.display = 'block';
   }
 }
+
+el('input-mode').onchange = () => {
+  const indoors = el('input-mode').value === 'livingroom';
+  el('mode-note').textContent = indoors
+    ? 'Played sitting together. Tap the map to send your token somewhere and it walks there — ' +
+      'GPS cannot work indoors, so travel happens on screen. One round is about 10 minutes.'
+    : 'Played on foot across a real area you draw on the map.';
+  el('input-area-side').parentElement.style.opacity = indoors ? 0.4 : 1;
+  el('input-length').parentElement.style.opacity = indoors ? 0.4 : 1;
+};
 
 el('btn-retry-location').onclick = async () => {
   await requestLocation();
@@ -127,15 +142,27 @@ el('btn-locate').onclick = () => {
 
 el('btn-host').onclick = async () => {
   currentPlayerName = el('input-name-host').value.trim() || 'Host';
-  if (!(await ensureLocation())) return;
+  const mode = el('input-mode').value;
+
+  // Indoors there is no GPS to ask for, and no real ground to draw over, so
+  // the play area is generated and the game is ready immediately.
+  if (mode === 'outdoor' && !(await ensureLocation())) return;
+
   const sideM = parseFloat(el('input-area-side').value) || 400;
   const lengthMin = parseFloat(el('input-length').value) || 90;
+  const opts = {
+    mode,
+    areaM2: sideM * sideM,
+    gameLengthMin: lengthMin,
+    endConditionMode: el('input-end-mode').value,
+  };
+  if (mode === 'livingroom') {
+    const centre = myPos || { lat: 51.5074, lng: -0.1278 };
+    opts.boundary = squareBoundaryAround(centre, LIVING_ROOM.defaultAreaSideM);
+    opts.gameLengthMin = LIVING_ROOM.gameLengthMin;
+  }
   try {
-    await hostCreateGame({
-      areaM2: sideM * sideM,
-      gameLengthMin: lengthMin,
-      endConditionMode: el('input-end-mode').value,
-    });
+    await hostCreateGame(opts);
   } catch (e) { storeConnectionFailed(e); return; }
   el('lobby-code').textContent = gameCode;
   showView('view-lobby');
@@ -145,13 +172,14 @@ el('btn-join').onclick = async () => {
   currentPlayerName = el('input-name-join').value.trim() || 'Player';
   const code = el('input-code').value.trim();
   if (!code) { alert('Enter a game code.'); return; }
-  if (!(await ensureLocation())) return;
   let ok;
   try { ok = await joinGame(code, currentPlayerName, false); }
   catch (e) { storeConnectionFailed(e); return; }
   if (ok) {
     el('lobby-code').textContent = gameCode;
     showView('view-lobby');
+    // Only outdoor games need GPS; ask once the mode is known.
+    if (!usingTravelMode()) await ensureLocation();
   }
 };
 
@@ -361,7 +389,10 @@ function renderLobby(players) {
   // Driven by the player document rather than set once at host time, so a
   // rematch host still gets their controls after the page reloads.
   el('host-controls').style.display = p.isHost ? 'block' : 'none';
-  if (p.isHost) initBoundaryMap();
+  // The boundary is generated indoors, so there is nothing to draw.
+  const boundaryCard = el('boundary-map').closest('.card');
+  if (boundaryCard) boundaryCard.style.display = usingTravelMode() ? 'none' : 'block';
+  if (p.isHost && !usingTravelMode()) initBoundaryMap();
 
   const title = el('role-title');
   const note = el('role-note');
@@ -681,10 +712,18 @@ function cancelMapTargeting() {
 }
 
 function onMapClick(e) {
-  if (!mapTargetCb) return;
-  const cb = mapTargetCb;
-  cancelMapTargeting();
-  cb({ lat: e.latlng.lat, lng: e.latlng.lng });
+  const point = { lat: e.latlng.lat, lng: e.latlng.lng };
+  if (mapTargetCb) {
+    const cb = mapTargetCb;
+    cancelMapTargeting();
+    cb(point);
+    return;
+  }
+  // Living-room mode: tapping open map sends your token walking.
+  if (usingTravelMode() && isPlaying() && me() && me().status === 'active') {
+    setTravelDestination(point);
+    renderWorld();
+  }
 }
 
 function beginPlayerTargeting(title, options, cb) {
@@ -993,6 +1032,16 @@ function renderWorld() {
       radius: 10, color: MAP.blood, fillColor: MAP.bloodDim, fillOpacity: 1,
     }).bindTooltip(`PANIC: ${e.name}`, { permanent: true }));
   });
+
+  // Where your token is heading, indoors.
+  if (usingTravelMode() && travelPos && travelDest) {
+    add(L.polyline([[travelPos.lat, travelPos.lng], [travelDest.lat, travelDest.lng]], {
+      color: MAP.cold, weight: 2, dashArray: '4 6', opacity: 0.8,
+    }));
+    add(L.circleMarker([travelDest.lat, travelDest.lng], {
+      radius: 5, color: MAP.cold, fill: false, weight: 2,
+    }).bindTooltip(`${Math.round(travelDistanceRemaining())}m to go`));
+  }
 
   // Self — always exact, always visible.
   if (p.realLat) {

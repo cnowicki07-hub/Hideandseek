@@ -10,7 +10,9 @@
 
 function totemPrecisionRadiusM() {
   // Design doc Section 3: equal to the game's base GPS accuracy, never smaller.
-  return CONFIG.baseAccuracyRadiusM;
+  // Living-room mode overrides it — tokens are exact, so there is no GPS
+  // slop to compensate for.
+  return totemPrecisionOverrideM() || CONFIG.baseAccuracyRadiusM;
 }
 
 async function placeTotem(point) {

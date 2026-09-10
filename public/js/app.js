@@ -73,8 +73,12 @@ async function hostCreateGame(opts) {
   M = computeM(areaM2);
   const lengthMin = opts.gameLengthMin || CONFIG.gameLengthMin;
 
-  let headstartMs = 0;
-  if (boundary && boundary.length >= 3) {
+  if (opts.mode === 'livingroom') applyGameMode('livingroom');
+
+  let headstartMs = opts.mode === 'livingroom'
+    ? LIVING_ROOM.hidingSeconds * 1000
+    : 0;
+  if (opts.mode !== 'livingroom' && boundary && boundary.length >= 3) {
     const diag = polygonLongestDiagonalM(boundary);
     const paceMs = (CONFIG.headstart.walkingPaceKmh * 1000) / 3600000; // m per ms
     headstartMs = Math.round((CONFIG.headstart.diagonalFraction * diag) / paceMs);
@@ -82,6 +86,7 @@ async function hostCreateGame(opts) {
 
   await gameRef().set({
     status: 'lobby',
+    mode: opts.mode || 'outdoor',
     areaM2, M,
     boundary,
     gameLengthMin: lengthMin,
@@ -211,6 +216,7 @@ function geoErrorText(err) {
 // websocket callback, say — silently does nothing and the game looks broken.
 function requestLocation() {
   return new Promise((resolve) => {
+    if (usingTravelMode()) { locationState = 'ok'; resolve({ ok: true }); return; }
     if (!navigator.geolocation) {
       locationState = 'unavailable';
       resolve({ ok: false, reason: 'This browser has no location support.' });
@@ -234,6 +240,17 @@ function requestLocation() {
 
 function startTracking() {
   if (watchId) return;
+  // Living-room mode has no GPS to watch — the token is driven by taps.
+  if (usingTravelMode()) {
+    const p = me();
+    const origin = (p && p.startLat != null)
+      ? { lat: p.startLat, lng: p.startLng }
+      : (gameState && gameState.boundary && gameState.boundary.length >= 3
+        ? polygonCentroid(gameState.boundary)
+        : null);
+    if (origin) { startTravel(origin); watchId = -1; }
+    return;
+  }
   if (!navigator.geolocation) return;
   watchId = navigator.geolocation.watchPosition(onPosition, (err) => {
     console.warn('geo error', err);
@@ -547,6 +564,20 @@ async function assignRolesRandom(numSeekers) {
 async function startGame() {
   const now = Date.now();
   const g = gameState || {};
+
+  // Indoors nobody has a real position, so hand everyone a starting point.
+  if (g.mode === 'livingroom' && g.boundary && g.boundary.length >= 3) {
+    const starts = scatterStartPositions(g.boundary, playersState);
+    const batch = db.batch();
+    Object.entries(starts).forEach(([id, pos]) => {
+      batch.update(playerRef(id), {
+        realLat: pos.lat, realLng: pos.lng, realUpdatedAt: now, lastContactAt: now,
+        startLat: pos.lat, startLng: pos.lng,
+      });
+    });
+    await batch.commit();
+  }
+
   await gameRef().update({
     status: 'hiding',
     startedAt: now,
@@ -710,6 +741,7 @@ function subscribeToGame() {
     const g = snap.data();
     if (!g) return;
     gameState = g;
+    if (g.mode) applyGameMode(g.mode);
     if (g.status === 'active' || g.status === 'hiding') {
       gameStartAt = g.startedAt;
       gameLengthMs = g.gameLengthMin * 60000;

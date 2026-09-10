@@ -125,6 +125,84 @@ const CONFIG = {
   },
 };
 
+// ---------------------------------------------------------------
+// Living-room mode
+//
+// GPS cannot work indoors: a living room is a few metres across, indoor
+// position error is tens of metres, and often there is no fix at all. So
+// indoors the game swaps real walking for tap-to-travel — you pick a
+// destination and your token walks there at speed. Travel time is what makes
+// the game work, so it is kept, just compressed.
+//
+// Everything else is identical: the same uncertainty circles, powers,
+// totems, hunts and sabotage, on a round that fits in about ten minutes.
+// ---------------------------------------------------------------
+
+const LIVING_ROOM = {
+  travelSpeedMps: 28,      // virtual metres per real second
+  timeScale: 9,            // 90-minute game becomes 10
+  gameLengthMin: 10,
+  defaultAreaSideM: 400,
+  hidingSeconds: 45,
+};
+
+// Applied over CONFIG once, after the game's mode is known. The list is
+// explicit rather than a recursive walk, so it is obvious what changes and
+// what deliberately does not.
+function applyGameMode(mode) {
+  if (mode !== 'livingroom' || CONFIG._mode === 'livingroom') return;
+  const t = LIVING_ROOM.timeScale;
+  const shorter = (ms) => Math.round(ms / t);
+
+  CONFIG._mode = 'livingroom';
+  CONFIG.gameLengthMin = LIVING_ROOM.gameLengthMin;
+
+  // Positions must sync faster, because tokens cover ground far quicker than
+  // people do. A ten-minute round makes the extra traffic irrelevant.
+  CONFIG.sync.minWriteIntervalMs = 1200;
+  CONFIG.sync.keepaliveMs = 6000;
+  CONFIG.sync.movementThresholdM = 12;
+  CONFIG.tickMs = 1000;
+
+  ['phase1StationaryMs', 'phase1MovingMs', 'phase2StationaryMs', 'phase2MovingMs',
+   'phase3StationaryMs', 'phase3MovingMs'].forEach((k) => {
+    CONFIG.ping[k] = shorter(CONFIG.ping[k]);
+  });
+  // Uncertainty is per minute of real time, so it has to grow faster to cover
+  // the same ground within a compressed round.
+  CONFIG.ping.growthRateMPerMinPhase12 *= t;
+  CONFIG.ping.growthRateMPerMinPhase3 *= t;
+  CONFIG.ping.movingThresholdMPerMin *= t;
+
+  CONFIG.charge.regenPerMs *= t;
+  CONFIG.charge.globalCooldownMs = shorter(CONFIG.charge.globalCooldownMs);
+  CONFIG.charge.conversionGraceMs = shorter(CONFIG.charge.conversionGraceMs);
+
+  [CONFIG.hiderPowers, CONFIG.seekerPowers].forEach((table) => {
+    Object.values(table).forEach((power) => {
+      if (power && typeof power.durationMs === 'number') power.durationMs = shorter(power.durationMs);
+      if (power && typeof power.forceBroadcastMs === 'number') power.forceBroadcastMs = shorter(power.forceBroadcastMs);
+      if (power && typeof power.displayMs === 'number') power.displayMs = shorter(power.displayMs);
+    });
+  });
+
+  CONFIG.totem.pingIntervalMs = shorter(CONFIG.totem.pingIntervalMs);
+  CONFIG.totem.sabotageTimeDivisor *= t;
+  CONFIG.totem.sabotageMaxMin /= t;
+  // Tokens are precise, unlike GPS, so standing on a totem can mean it.
+  CONFIG.totem.sabotageOverrideRadiusM = 12;
+
+  CONFIG.hunt.noCaptureCooldownMs = shorter(CONFIG.hunt.noCaptureCooldownMs);
+  CONFIG.hunt.durationMs = shorter(CONFIG.hunt.durationMs);
+  CONFIG.hunt.bearingRefreshMs = shorter(CONFIG.hunt.bearingRefreshMs);
+
+  CONFIG.boundary.breachTimerMs = shorter(CONFIG.boundary.breachTimerMs);
+
+  // Deliberately NOT scaled: the offline timers. Someone whose phone drops
+  // out for 90 seconds shouldn't be eliminated mid-round.
+  CONFIG.livingRoom = LIVING_ROOM;
+}
+
 // M = sqrt(boundary area). Set once the host draws/enters the play area.
 function computeM(areaM2) {
   return Math.sqrt(areaM2);
@@ -132,6 +210,10 @@ function computeM(areaM2) {
 
 function totemRadiusM(M) {
   return CONFIG.totem.radiusFraction * M;
+}
+
+function totemPrecisionOverrideM() {
+  return CONFIG.totem.sabotageOverrideRadiusM || null;
 }
 
 function totemSabotageSeconds(radiusM) {

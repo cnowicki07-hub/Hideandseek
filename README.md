@@ -34,6 +34,25 @@ Firebase and Netlify are gone. The game logic still runs in each player's
 browser — the Durable Object is a shared, authoritative document store with
 a push channel, which is all Firestore was doing here.
 
+## Two ways to play
+
+**Outdoors** — the real game. Everyone walks a real area the host draws on
+the map, on real GPS, for as long as the host sets.
+
+**Living room** — chosen when hosting, for playing indoors sitting together
+in about ten minutes. GPS cannot work indoors: a living room is a few metres
+across, indoor position error is tens of metres, and often there is no fix
+at all. So indoors the game swaps walking for **tap-to-travel** — you tap a
+destination and your token walks there at speed. Travel time is the
+substance of the game (can you reach that totem before a seeker sweeps it?),
+so it is kept, just compressed.
+
+Everything else is identical — the same uncertainty circles, powers, totems,
+hunts, sabotage and capture. Timings are scaled by the same factor
+throughout, so the game feels proportionally the same, and the play area is
+generated so there is nothing to set up. It needs no location permission at
+all.
+
 ## 1. Run it locally
 
 ```
@@ -88,12 +107,20 @@ it there; broadcasting whole game state instead would multiply it.
 
 ```
 npm i -D playwright && npx playwright install chromium
-node test/e2e.mjs                                    # offline store
-BASE_URL=http://localhost:8787 node test/e2e.mjs     # real Durable Object
+
+node test/e2e.mjs                                          # outdoor, offline store
+BASE_URL=http://localhost:8787 node test/e2e.mjs           # outdoor, real Durable Object
+node test/living-room.mjs                                  # indoor
+BASE_URL=http://localhost:8787 node test/living-room.mjs   # indoor, real Durable Object
 ```
 
-Run it both ways — the second is the one that proves the real backend works.
-Drives a full five-player game and asserts 72 rules from the design doc:
+Run the outdoor suite both ways — the second is the one that proves the real
+backend works. `living-room.mjs` runs a browser with **no geolocation
+permission granted at all**, which is the point: the indoor game has to work
+on a device with no usable GPS.
+
+The outdoor suite drives a full five-player game and asserts 78 rules from
+the design doc:
 ping cadence and uncertainty growth, every power's effect as seen from the
 *other* player's client, totem scaling and sabotage accrual/decay, hunt
 bearings, snitch fidelity bands, boundary breach, capture, scoring, and
