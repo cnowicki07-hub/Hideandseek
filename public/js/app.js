@@ -145,6 +145,7 @@ async function joinGame(code, name, isHost) {
       snitchUsedAt: 0,
       outOfBoundsReadings: 0,
       breachStartedAt: 0,
+      declaredHiddenAt: null,
       survivalMs: null,
       endedAt: null,
       lastContactAt: Date.now(),
@@ -192,12 +193,52 @@ async function spendCharge(amount) {
 
 // ---------- Position tracking ----------
 
+let locationState = 'unknown';   // unknown | ok | denied | unavailable
+
+function geoErrorText(err) {
+  if (!err) return 'Location unavailable.';
+  if (err.code === 1) {
+    return 'Location permission was refused. The game cannot work without it — ' +
+      'allow location for this site in your browser settings, then tap Retry.';
+  }
+  if (err.code === 2) return 'Your phone could not get a fix. Step outside and try again.';
+  if (err.code === 3) return 'Locating timed out. Try again with a clear view of the sky.';
+  return err.message || 'Location unavailable.';
+}
+
+// Must be called from inside a tap. iOS Safari only shows the permission
+// prompt in response to a user gesture, so asking for it later — from a
+// websocket callback, say — silently does nothing and the game looks broken.
+function requestLocation() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      locationState = 'unavailable';
+      resolve({ ok: false, reason: 'This browser has no location support.' });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        myPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        locationState = 'ok';
+        startTracking();
+        resolve({ ok: true });
+      },
+      (err) => {
+        locationState = err && err.code === 1 ? 'denied' : 'unavailable';
+        resolve({ ok: false, reason: geoErrorText(err) });
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
+
 function startTracking() {
   if (watchId) return;
-  if (!navigator.geolocation) { alert('No GPS on this device/browser.'); return; }
+  if (!navigator.geolocation) return;
   watchId = navigator.geolocation.watchPosition(onPosition, (err) => {
     console.warn('geo error', err);
-    toast('GPS error: ' + (err.message || 'unavailable'));
+    if (err && err.code === 1) locationState = 'denied';
+    toast(geoErrorText(err));
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
 }
 
@@ -237,7 +278,7 @@ function onPosition(pos) {
     lastPositionWrite = { lat: here.lat, lng: here.lng, at: now };
   }
 
-  if (playerRole === 'hider') maybeSendHiderPing(here, now, p);
+  if (playerRole === 'hider' && isPlaying()) maybeSendHiderPing(here, now, p);
 }
 
 // Seekers broadcast continuously at full accuracy, unless Go Dark is active
@@ -430,6 +471,7 @@ async function lookupCaptureTarget(enteredCode) {
 }
 
 async function confirmCapture(targetId) {
+  if (isHiding()) { toast('Not yet — the hiders are still hiding.'); return { ok: false }; }
   const now = Date.now();
   const target = playersState[targetId];
   await playerRef(targetId).update({
@@ -444,6 +486,7 @@ async function confirmCapture(targetId) {
     survivalMs: survivalMsFor(target, now),
     // A converted hider drops every hider-side state.
     huntedBy: {},
+    declaredHiddenAt: null,
     activePower: null,
     activePowerExpiresAt: 0,
     pendingPingMod: null,
@@ -499,14 +542,39 @@ async function assignRolesRandom(numSeekers) {
   await batch.commit();
 }
 
+// Starting begins the hiding phase, not the hunt. Hiders scatter; seekers are
+// held until the clock runs out or every hider says they are hidden.
 async function startGame() {
   const now = Date.now();
   const g = gameState || {};
   await gameRef().update({
-    status: 'active',
+    status: 'hiding',
     startedAt: now,
-    seekersReleaseAt: now + (g.headstartMs || 0),
+    hidingEndsAt: now + (g.headstartMs || 0),
+    releasedAt: null,
   });
+}
+
+async function releaseSeekers() {
+  if (!gameState || gameState.status !== 'hiding') return;
+  await gameRef().update({ status: 'active', releasedAt: Date.now() });
+}
+
+async function declareHidden() {
+  const p = me();
+  if (!p || p.role !== 'hider' || p.declaredHiddenAt) return;
+  await playerRef().update({ declaredHiddenAt: Date.now() });
+  toast('Marked as hidden. Sit tight.');
+}
+
+function isHiding() { return !!(gameState && gameState.status === 'hiding'); }
+function isPlaying() {
+  return !!(gameState && (gameState.status === 'active' || gameState.status === 'hiding'));
+}
+
+function hidersStillHiding() {
+  return Object.values(playersState)
+    .filter((p) => p.role === 'hider' && p.status === 'active' && !p.declaredHiddenAt);
 }
 
 // The drawn boundary is the source of truth for area, and therefore for M,
@@ -622,16 +690,10 @@ async function endGameNow() {
 function isPaused() { return !!(gameState && gameState.pausedAt); }
 
 function elapsedGameMs() {
-  if (!gameStartAt) return 0;
   const g = gameState || {};
+  if (!g.releasedAt) return 0;
   const pausedNow = g.pausedAt ? Date.now() - g.pausedAt : 0;
-  return Date.now() - gameStartAt - (g.pausedTotalMs || 0) - pausedNow;
-}
-
-function inHeadstart() {
-  const g = gameState;
-  if (!g || !g.seekersReleaseAt) return false;
-  return Date.now() < g.seekersReleaseAt;
+  return Date.now() - g.releasedAt - (g.pausedTotalMs || 0) - pausedNow;
 }
 
 // ---------- Realtime subscriptions ----------
@@ -648,7 +710,7 @@ function subscribeToGame() {
     const g = snap.data();
     if (!g) return;
     gameState = g;
-    if (g.status === 'active') {
+    if (g.status === 'active' || g.status === 'hiding') {
       gameStartAt = g.startedAt;
       gameLengthMs = g.gameLengthMin * 60000;
       if (!watchId) startTracking();
@@ -742,7 +804,7 @@ function tick() {
     lastContactWrite = now;
     playerRef().update({ lastContactAt: now }).catch(() => {});
   }
-  if (!gameState || gameState.status !== 'active' || isPaused()) { refreshHud(); return; }
+  if (!isPlaying() || isPaused()) { refreshHud(); return; }
   if (p.status !== 'active') { refreshHud(); return; }
 
   expireActivePower(p, now);
@@ -852,6 +914,16 @@ function tickBoundary(p, now) {
 }
 
 function tickHostChecks(now) {
+  // Release the seekers as soon as every hider says they're hidden, or when
+  // the hiding clock runs out — whichever comes first.
+  if (isHiding()) {
+    const hiders = Object.values(playersState)
+      .filter((p) => p.role === 'hider' && p.status === 'active');
+    const allHidden = hiders.length > 0 && hiders.every((p) => p.declaredHiddenAt);
+    if (allHidden || now >= (gameState.hidingEndsAt || 0)) releaseSeekers();
+    return;
+  }
+
   // Offline flag / auto-elimination, and the end condition. Run by the host's
   // client only, so these fire once rather than once per player.
   Object.entries(playersState).forEach(([id, p]) => {

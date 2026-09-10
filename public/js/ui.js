@@ -54,6 +54,45 @@ function toast(msg) {
   setTimeout(() => node.remove(), 4200);
 }
 
+// Asked for from inside the tap that starts a game — see requestLocation().
+async function ensureLocation() {
+  const r = await requestLocation();
+  renderLocationStatus();
+  if (!r.ok) {
+    alert(r.reason + '\n\nThis game is played entirely on GPS, so it cannot start without it.');
+    return false;
+  }
+  return true;
+}
+
+function renderLocationStatus() {
+  const status = el('location-status');
+  const retry = el('btn-retry-location');
+  if (!status) return;
+  if (locationState === 'ok') {
+    status.textContent = myPos
+      ? 'Location on. You are being tracked.'
+      : 'Location on, waiting for a fix.';
+    status.className = 'muted';
+    retry.style.display = 'none';
+  } else if (locationState === 'unknown') {
+    status.textContent = 'Checking…';
+    status.className = 'muted';
+    retry.style.display = 'none';
+  } else {
+    status.textContent = locationState === 'denied'
+      ? 'Location is blocked. Allow it for this site in your browser settings, then tap Retry.'
+      : 'No location fix yet. Step outside with a clear view of the sky and tap Retry.';
+    status.className = 'warn';
+    retry.style.display = 'block';
+  }
+}
+
+el('btn-retry-location').onclick = async () => {
+  await requestLocation();
+  renderLocationStatus();
+};
+
 let boundaryWarningM = null;
 function setBoundaryWarning(dist) { boundaryWarningM = dist; }
 
@@ -88,6 +127,7 @@ el('btn-locate').onclick = () => {
 
 el('btn-host').onclick = async () => {
   currentPlayerName = el('input-name-host').value.trim() || 'Host';
+  if (!(await ensureLocation())) return;
   const sideM = parseFloat(el('input-area-side').value) || 400;
   const lengthMin = parseFloat(el('input-length').value) || 90;
   try {
@@ -105,6 +145,7 @@ el('btn-join').onclick = async () => {
   currentPlayerName = el('input-name-join').value.trim() || 'Player';
   const code = el('input-code').value.trim();
   if (!code) { alert('Enter a game code.'); return; }
+  if (!(await ensureLocation())) return;
   let ok;
   try { ok = await joinGame(code, currentPlayerName, false); }
   catch (e) { storeConnectionFailed(e); return; }
@@ -266,13 +307,31 @@ el('btn-assign-roles').onclick = async () => {
 };
 
 el('btn-start-game').onclick = async () => {
-  const all = Object.values(playersState);
-  if (all.some((p) => !p.role) && !confirm('Some players have no role yet. Start anyway?')) return;
-  const waiting = all.filter((p) => p.role === 'hider' && (!p.loadout || p.loadout.length < 3));
-  if (waiting.length &&
-      !confirm(`${waiting.map((p) => p.name).join(', ')} haven't finished choosing powers. Start anyway?`)) return;
   await startGame();
 };
+
+// A scannable join link beats five people typing a five-letter code in a
+// dark field.
+let qrRenderedFor = null;
+function renderJoinQr() {
+  if (!gameCode || qrRenderedFor === gameCode) return;
+  const holder = el('qr-holder');
+  if (!holder || typeof qrcodegen === 'undefined') return;
+
+  const url = `${location.origin}/?join=${gameCode}`;
+  try {
+    const qr = qrcodegen(0, 'M');
+    qr.addData(url);
+    qr.make();
+    holder.innerHTML = qr.createSvgTag({ cellSize: 5, margin: 8, scalable: true });
+    el('join-link').textContent = url;
+    qrRenderedFor = gameCode;
+  } catch (e) {
+    console.warn('qr failed', e);
+    holder.innerHTML = '';
+    el('join-link').textContent = url;
+  }
+}
 
 function renderLobbyList(players) {
   const list = el('lobby-players');
@@ -295,6 +354,9 @@ function renderLobby(players) {
   const p = players[playerId];
   if (!p) return;
   renderLobbyList(players);
+  renderJoinQr();
+  renderLocationStatus();
+  maybeShowFirstRunHelp();
 
   // Driven by the player document rather than set once at host time, so a
   // rematch host still gets their controls after the page reloads.
@@ -307,15 +369,28 @@ function renderLobby(players) {
 
   if (!p.role) {
     title.textContent = 'Waiting for roles';
-    note.textContent = 'The host assigns roles once everyone has joined. You pick your powers after that.';
+    note.innerHTML = 'The host assigns roles once everyone has joined. You pick your powers after that.' +
+      '<br><br>Never played? Tap <strong>How to play</strong> above.';
     loadout.style.display = 'none';
   } else if (p.role === 'seeker') {
     title.textContent = "You're a SEEKER";
-    note.textContent = 'Seekers all share the same powers, so there is nothing to choose. Sit tight.';
+    note.innerHTML =
+      '<strong>Your job:</strong> find every hider before the clock runs out.<br><br>' +
+      'You can see roughly where hiders are — a circle that grows the longer they stay put, ' +
+      'so campers get easier to find. Hiders cannot see you at all, unless they spend a power.<br><br>' +
+      'To catch someone you have to physically reach them and get them to read out their ' +
+      '4-letter code. There is no tag button.<br><br>' +
+      'Seekers all share the same powers, so there is nothing to choose here.';
     loadout.style.display = 'none';
   } else {
     title.textContent = "You're a HIDER";
-    note.textContent = 'Choose what you want to carry. You cannot change it once the game starts.';
+    note.innerHTML =
+      '<strong>Your job:</strong> stay unfound for as long as you can. You are scored on survival time.<br><br>' +
+      'Your phone reports your position now and then. Staying still makes that report vaguer — ' +
+      'but the reports pile up in the same spot, so camping forever gets you caught. ' +
+      'Moving keeps the circle tight but reports more often.<br><br>' +
+      'You cannot see the seekers unless you spend a power on it.<br><br>' +
+      'Pick the powers you want to carry. You cannot change them once the game starts.';
     loadout.style.display = 'block';
     renderLoadoutPicker();
   }
@@ -334,12 +409,17 @@ function renderHostLobbyStatus(players) {
     : `${all.length} player(s) here. Nobody has a role yet.`;
 
   const waiting = hiders.filter((h) => !h.loadout || h.loadout.length < 3);
-  el('btn-start-game').disabled = assigned === 0;
+  const unassigned = all.filter((x) => !x.role);
+  const blocked = !assigned || unassigned.length > 0 || waiting.length > 0;
+
+  el('btn-start-game').disabled = blocked;
   el('ready-status').textContent = !assigned
     ? 'Assign roles before starting.'
-    : waiting.length
-      ? `Still choosing powers: ${waiting.map((h) => h.name).join(', ')}.`
-      : 'Everyone has chosen their powers.';
+    : unassigned.length
+      ? `No role yet: ${unassigned.map((x) => x.name).join(', ')}.`
+      : waiting.length
+        ? `Waiting on powers: ${waiting.map((h) => h.name).join(', ')}.`
+        : 'Everyone is ready. Starting begins hiding time.';
 }
 
 // ---------- game status ----------
@@ -352,7 +432,7 @@ function renderGameStatus(g) {
       drawBoundaryDraft();
     }
   }
-  if (g.status === 'active') {
+  if (g.status === 'active' || g.status === 'hiding') {
     if (!el('view-game').classList.contains('active')) {
       showView('view-game');
       initMap();
@@ -408,6 +488,7 @@ function refreshHud() {
   el('charge-value').textContent = Math.floor(currentCharge(p));
   el('my-code').textContent = p.captureCode || '----';
   el('hud-role').textContent = p.status === 'active' ? (p.role || '—') : p.status.replace('_', ' ');
+  renderHidingBar(p, now);
   renderBanners(p, now);
   refreshPowerButtons(p, now);
   refreshActionButtons(p, now);
@@ -415,17 +496,47 @@ function refreshHud() {
 
 // ---------- banners ----------
 
+// During hiding, the only thing that matters is whether you're hidden yet.
+function renderHidingBar(p, now) {
+  const bar = el('hiding-bar');
+  if (!isHiding()) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+
+  const left = Math.max(0, Math.ceil(((gameState.hidingEndsAt || 0) - now) / 1000));
+  const mins = Math.floor(left / 60);
+  const secs = left % 60;
+  const clock = `${mins}:${String(secs).padStart(2, '0')}`;
+  const remaining = hidersStillHiding();
+  const btn = el('btn-declare-hidden');
+
+  if (p.role === 'hider') {
+    if (p.declaredHiddenAt) {
+      el('hiding-text').innerHTML =
+        `<strong>You're hidden.</strong> Seekers released in ${clock}` +
+        (remaining.length ? `, or sooner — waiting on ${remaining.length} other(s).` : '.');
+      btn.disabled = true;
+      btn.textContent = 'Hidden ✓';
+    } else {
+      el('hiding-text').innerHTML =
+        `<strong>GO HIDE.</strong> Seekers released in ${clock}. ` +
+        `Tap when you're in place — if everyone does, they come early.`;
+      btn.disabled = false;
+      btn.textContent = "I'm hidden";
+    }
+  } else {
+    el('hiding-text').innerHTML = remaining.length
+      ? `<strong>Held at the start line.</strong> ${clock} left, or until all hiders are set. ` +
+        `${remaining.length} still moving.`
+      : `<strong>Everyone is hidden.</strong> Releasing you now…`;
+    btn.style.display = 'none';
+  }
+}
+
 function renderBanners(p, now) {
   const strip = el('banner-strip');
   const items = [];
 
   if (isPaused()) items.push(['warn', 'Game paused by the host.']);
-  if (inHeadstart()) {
-    const left = Math.ceil((gameState.seekersReleaseAt - now) / 1000);
-    items.push(['info', playerRole === 'seeker'
-      ? `Held at the start line — released in ${left}s.`
-      : `Head start — seekers released in ${left}s.`]);
-  }
   if (inGrace(p)) items.push(['info', `Powers unlock in ${Math.ceil((p.graceUntil - now) / 1000)}s.`]);
   if (p.lockedOutUntil && now < p.lockedOutUntil) {
     items.push(['warn', `Locked out for ${Math.ceil((p.lockedOutUntil - now) / 1000)}s.`]);
@@ -526,6 +637,9 @@ function buildActionButtons() {
 }
 
 function refreshActionButtons(p, now) {
+  const capture = el('act-capture');
+  if (capture) capture.disabled = isHiding();
+
   const hunt = el('act-hunt');
   if (hunt) {
     const ok = huntAvailable(now) && !(p.activeHunt && now < p.activeHunt.expiresAt) && !inGrace(p);
@@ -1050,6 +1164,99 @@ function renderReveals(p, now, add) {
   }
 }
 
+
+// ---------- how to play ----------
+// Written for someone handed a phone in a park with no idea what this is.
+// Tailored to your role once you have one, because the two roles play
+// almost nothing alike.
+
+function howToPlayHtml(role) {
+  const common = `
+    <h4>The short version</h4>
+    <p>Hiders scatter across a marked area and try not to get found.
+       Seekers go looking. Everything runs on your phone's GPS, so
+       <strong>keep the screen on and the app open</strong> — if you lock your
+       phone, it stops reporting you.</p>
+
+    <h4>Nobody's position is exact</h4>
+    <p>Seekers don't see hiders as dots. They see a <em>circle</em> that the
+       hider is somewhere inside. The circle grows the longer someone stays
+       still, and snaps tight again when they move — but moving reports you
+       more often. That trade is the whole game.</p>
+
+    <h4>Getting caught</h4>
+    <p>There is no tag button. A seeker has to physically find you and ask for
+       the <strong>4-letter code</strong> shown at the top of your screen. You read
+       it out, they type it in, and you switch sides and start seeking.</p>
+
+    <h4>Powers</h4>
+    <p>Everything costs <em>charge</em>, shown as ⚡ at the top. It refills slowly
+       on its own, and there's a cooldown after each use, so you can't chain them.
+       Tap and hold a power to read what it does.</p>
+
+    <h4>Staying safe</h4>
+    <p>Stay inside the boundary — step outside and a countdown starts, and you're
+       out if it finishes. The <strong>Help</strong> button is not part of the game:
+       it tells everyone exactly where you are and ends your round. Use it if
+       something goes actually wrong. It is not an emergency service — call one
+       of those if you need one.</p>`;
+
+  if (role === 'seeker') {
+    return `
+      <h4>You're a seeker</h4>
+      <p>Find every hider before the clock runs out. You broadcast your own
+         position constantly, so hiders who spend a power can see you coming.</p>
+      <p>Your circles are your leads: a stack of circles in the same place means
+         someone is sitting still there. A drifting line of them means someone is
+         on the move.</p>
+      <p>If nobody's been caught for a while, you can start a <strong>Hunt</strong> —
+         you get a bearing to one hider, refreshed every 30 seconds. They get told,
+         and they get a bearing back to you, so it becomes a chase.</p>
+      ${common}`;
+  }
+
+  if (role === 'hider') {
+    return `
+      <h4>You're a hider</h4>
+      <p>Survive. You're scored on how long you last, so there's no shame in
+         being boring — but the game punishes sitting in one spot forever,
+         because your reports pile up in the same place.</p>
+      <p>You can't see the seekers at all unless you spend a power on it.
+         That blankness is deliberate.</p>
+      <p>Two things to know that aren't obvious. <strong>Totems</strong> are
+         watchtowers seekers can drop; standing inside one gets you reported
+         anonymously. Two hiders standing at one together can destroy it.
+         And if you're being hunted, you can <strong>Snitch</strong> — sell out
+         another hider to get the seeker off you. They're never told it was you.</p>
+      ${common}`;
+  }
+
+  return `<h4>Two roles</h4>
+    <p>The host decides who hides and who seeks. You'll be told in a moment, and
+       this page will explain your side of it.</p>
+    ${common}`;
+}
+
+function openHowToPlay() {
+  const p = me();
+  el('how-body').innerHTML = howToPlayHtml(p && p.role);
+  el('how-modal').style.display = 'flex';
+}
+
+el('btn-how-landing').onclick = openHowToPlay;
+el('btn-how-lobby').onclick = openHowToPlay;
+el('btn-close-how').onclick = () => { el('how-modal').style.display = 'none'; };
+
+// Shown once, the first time a player reaches a live game, so nobody starts
+// running with no idea what the screen means.
+function maybeShowFirstRunHelp() {
+  try {
+    if (localStorage.getItem('h_seen_help')) return;
+    localStorage.setItem('h_seen_help', '1');
+  } catch (e) { return; }
+  openHowToPlay();
+}
+
 // ---------- scoreboard ----------
 
 const OUTCOME_LABEL = {
@@ -1097,6 +1304,8 @@ function renderEndActions() {
   btn.disabled = true;
   note.textContent = 'The host can open another round from this screen.';
 }
+
+el('btn-declare-hidden').onclick = () => declareHidden();
 
 el('btn-back-start').onclick = backToStart;
 

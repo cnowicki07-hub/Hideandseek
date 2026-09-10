@@ -261,21 +261,30 @@ button.danger {
 }
 .locate-fab:active { background: #1d1016; }
 
-.panic-fab {
+/* Safety equipment, deliberately NOT game furniture.
+   No horror styling, no serif, no glow, no pulse — it should read as the
+   first-aid kit bolted to the wall, not as the most exciting button on
+   screen. Small and calm, but always reachable. */
+.safety-btn {
   position: absolute; right: 12px; bottom: 128px;
-  width: 64px; height: 64px; border-radius: 50%; margin: 0; padding: 0;
-  background: radial-gradient(circle at 50% 35%, var(--blood-lit), var(--blood-dim));
-  border: 1px solid #ff5a60;
-  font-size: 12px; line-height: 1.1; font-weight: 700; letter-spacing: 0.08em;
-  box-shadow: 0 0 18px rgba(224,27,38,0.5), 0 3px 10px rgba(0,0,0,0.7);
+  width: 52px; height: 52px; border-radius: 8px; margin: 0; padding: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px;
+  background: #e8e6e1;
+  border: 1px solid #b9b5ad;
+  color: #22262b;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 600; letter-spacing: 0; text-transform: none;
+  text-shadow: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.6);
   z-index: 900;
-  animation: heartbeat 2.4s ease-in-out infinite;
+  animation: none;
 }
-.panic-fab span { font-size: 9px; font-weight: 400; opacity: 0.85; letter-spacing: 0; }
-.panic-fab.holding { animation: none; transform: scale(0.94); box-shadow: 0 0 34px rgba(224,27,38,0.95); }
-@keyframes heartbeat {
-  0%, 100% { box-shadow: 0 0 14px rgba(224,27,38,0.35), 0 3px 10px rgba(0,0,0,0.7); }
-  50%      { box-shadow: 0 0 26px rgba(224,27,38,0.75), 0 3px 10px rgba(0,0,0,0.7); }
+.safety-icon { font-size: 17px; line-height: 1; color: #167a3c; }
+.safety-label { font-size: 10px; line-height: 1; }
+.safety-btn.holding {
+  background: #fff; border-color: #167a3c;
+  box-shadow: 0 0 0 3px rgba(22,122,60,0.35);
 }
 
 .targeting-prompt {
@@ -336,6 +345,39 @@ button.danger {
 }
 .scoreboard li::marker { color: var(--blood); font-weight: 700; }
 
+/* ---------- hiding phase ---------- */
+
+#hiding-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, #1b0d10 0%, #0a0508 100%);
+  border-bottom: 1px solid var(--edge-lit);
+}
+#hiding-text { flex: 1; font-size: 13px; line-height: 1.35; color: var(--bone); }
+#hiding-text strong { color: var(--blood-lit); letter-spacing: 0.06em; }
+#btn-declare-hidden {
+  width: auto; flex: 0 0 auto; margin: 0; padding: 11px 14px; font-size: 12px;
+}
+
+/* ---------- join QR ---------- */
+
+.qr-card { text-align: center; }
+#qr-holder svg { width: 190px; height: 190px; background: #fff; padding: 8px; border-radius: 3px; }
+#qr-holder { margin-bottom: 8px; }
+#join-link { word-break: break-all; font-size: 11px; }
+
+/* ---------- how to play ---------- */
+
+.how h4 {
+  font-family: "Times New Roman", Georgia, serif;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--blood-lit); font-size: 14px; margin: 16px 0 6px;
+}
+.how h4:first-child { margin-top: 0; }
+.how p { font-size: 14px; line-height: 1.5; color: #c3bcb5; margin: 0 0 10px; }
+.how strong { color: var(--bone); }
+.how em { color: var(--amber); font-style: normal; }
+
 @media (prefers-reduced-motion: reduce) {
-  h1, .panic-fab, .banner.danger { animation: none; }
+  h1, .banner.danger { animation: none; }
 }

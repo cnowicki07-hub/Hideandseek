@@ -25,7 +25,7 @@ const POWERS = {
   // ---------- Hider loadout ----------
   smear: {
     role: 'hider', loadout: true, label: 'Smear',
-    desc: 'Next ping reports as a wide directional arc instead of a circle.',
+    desc: 'Your next ping shows seekers a wide wedge instead of a dot. They learn roughly which way you are, but not where.',
     cost: () => CONFIG.hiderPowers.smear.cost,
     target: 'self',
     async run() {
@@ -36,7 +36,7 @@ const POWERS = {
 
   false_trail: {
     role: 'hider', loadout: true, label: 'False trail',
-    desc: 'Reports a false direction of travel. Counters Backtrace.',
+    desc: 'If a seeker checks which way you were heading, they get a wrong answer for the next 5 minutes.',
     cost: () => CONFIG.hiderPowers.false_trail.cost,
     target: 'self',
     async run() {
@@ -55,7 +55,7 @@ const POWERS = {
 
   disarm: {
     role: 'hider', loadout: true, label: 'Disarm',
-    desc: 'Reveals and destroys tripwires within 50m.',
+    desc: 'Finds and destroys any hidden seeker traps within 50m of you. Use it before crossing a gate or a bridge.',
     cost: () => CONFIG.hiderPowers.disarm.cost,
     target: 'self',
     async run() {
@@ -77,7 +77,7 @@ const POWERS = {
 
   go_quiet: {
     role: 'hider', loadout: true, label: 'Go quiet',
-    desc: 'Skip your next scheduled ping entirely.',
+    desc: 'Skips your next position report entirely. Seekers just see your old circle growing — it looks like your phone lost signal.',
     cost: () => CONFIG.hiderPowers.go_quiet.cost,
     target: 'self',
     async run() {
@@ -88,7 +88,7 @@ const POWERS = {
 
   uncloak: {
     role: 'hider', loadout: true, label: 'Uncloak',
-    desc: 'Forces any dark seeker within 300m back into broadcast for 60s.',
+    desc: 'Drags any hidden seeker within 300m back into view for a minute. Use it when you think one is creeping up on you.',
     cost: () => CONFIG.hiderPowers.uncloak.cost,
     target: 'self',
     async run() {
@@ -113,7 +113,7 @@ const POWERS = {
 
   read_the_sweep: {
     role: 'hider', loadout: true, label: 'Read the sweep',
-    desc: 'See seeker-covered ground for 30 seconds.',
+    desc: 'Shows you where the seekers are, and how much ground they can see, for 30 seconds. Your one look at the board.',
     cost: () => CONFIG.hiderPowers.read_the_sweep.cost,
     target: 'self',
     async run() {
@@ -127,7 +127,7 @@ const POWERS = {
 
   silent_run: {
     role: 'hider', loadout: true, label: 'Silent run',
-    desc: 'Move for 3 minutes on the stationary ping cadence.',
+    desc: 'Move for 3 minutes without reporting your position more often. Normally moving makes you ping faster — this is how you relocate safely.',
     cost: () => CONFIG.hiderPowers.silent_run.cost,
     target: 'self',
     async run() {
@@ -141,7 +141,7 @@ const POWERS = {
 
   decoy: {
     role: 'hider', loadout: true, label: 'Decoy',
-    desc: 'A fake marker walks a bearing you choose. Your real ping is suppressed.',
+    desc: 'A fake you walks off in a direction you pick, while your real position stops being reported for 3 minutes.',
     cost: () => CONFIG.hiderPowers.decoy.cost,
     target: 'bearing',
     async run(ctx) {
@@ -161,7 +161,7 @@ const POWERS = {
   // ---------- Seeker ----------
   probe: {
     role: 'seeker', label: 'Probe',
-    desc: 'Yes/no: is any hider inside a 100m circle you pick right now.',
+    desc: 'Ask whether any hider is inside a 100m circle you tap on the map. Yes or no, nothing more. Cheap way to rule ground out.',
     cost: () => CONFIG.seekerPowers.probe.cost,
     target: 'point',
     async run(ctx) {
@@ -177,7 +177,7 @@ const POWERS = {
 
   backtrace: {
     role: 'seeker', label: 'Backtrace',
-    desc: "Reveal a hider's direction of travel from their last two pings.",
+    desc: "Shows which direction a chosen hider was last moving. Tells you where to cut them off, not where they are.",
     cost: () => CONFIG.seekerPowers.backtrace.cost,
     target: 'hider',
     async run(ctx) {
@@ -198,7 +198,7 @@ const POWERS = {
 
   tripwire: {
     role: 'seeker', label: 'Tripwire',
-    desc: 'Hidden marker here. Alerts you with a position if a hider passes within 20m.',
+    desc: 'Leaves a hidden trap where you stand. If a hider passes within 20m it alerts you and tells you exactly where they were.',
     cost: () => CONFIG.seekerPowers.tripwire.cost,
     target: 'self',
     async run() {
@@ -212,7 +212,7 @@ const POWERS = {
 
   go_dark: {
     role: 'seeker', label: 'Go dark',
-    desc: 'Stop broadcasting your position for 3 minutes.',
+    desc: "Stops broadcasting your own position for 3 minutes, so hiders using Read the Sweep can't see you coming.",
     cost: () => CONFIG.seekerPowers.go_dark.cost,
     target: 'self',
     async run() {
@@ -228,7 +228,7 @@ const POWERS = {
 
   lockout: {
     role: 'seeker', label: 'Lockout',
-    desc: 'Target hider cannot use loadout powers for 3 minutes.',
+    desc: 'Stops one hider using any of their powers for 3 minutes. Use it on someone you are closing in on.',
     cost: () => CONFIG.seekerPowers.lockout.cost,
     target: 'hider',
     async run(ctx) {
@@ -241,7 +241,7 @@ const POWERS = {
 
   scan: {
     role: 'seeker', label: 'Scan',
-    desc: 'Reveal the exact position of every hider within 100m. One snapshot.',
+    desc: 'Instantly reveals the exact position of every hider within 100m of you. One snapshot. Your strongest close-range tool.',
     cost: () => CONFIG.seekerPowers.scan.cost,
     target: 'self',
     async run() {
@@ -263,7 +263,7 @@ const POWERS = {
 
   beacon: {
     role: 'seeker', label: 'Beacon',
-    desc: 'Target hider is lit up continuously. Spreads to hiders within 30m of them.',
+    desc: 'Lights one hider up permanently for 5 minutes — you see their exact position the whole time. It also spreads to any hider who goes near them.',
     cost: () => CONFIG.seekerPowers.beacon.cost,
     target: 'hider',
     async run(ctx) {
@@ -276,7 +276,7 @@ const POWERS = {
 
   cordon: {
     role: 'seeker', label: 'Cordon',
-    desc: '150m circle for 5 minutes. Hiders inside it ping continuously.',
+    desc: 'Drops a 150m ring for 5 minutes. Any hider caught inside is forced to report their position constantly until they get out.',
     cost: () => CONFIG.seekerPowers.cordon.cost,
     target: 'point',
     async run(ctx) {
@@ -291,7 +291,7 @@ const POWERS = {
 
   totem: {
     role: 'seeker', label: 'Totem',
-    desc: 'Place a permanent totem anywhere on the map.',
+    desc: 'Places a permanent watchtower anywhere on the map. It reports, anonymously, whenever a hider is inside it. Two hiders working together can destroy it.',
     cost: () => CONFIG.seekerPowers.totem.cost,
     target: 'point',
     guard() {
@@ -312,6 +312,11 @@ function powerBlockedReason(key, p, now) {
   now = now || Date.now();
   if (!def) return 'Unknown power.';
   if (!p || p.status !== 'active') return 'You are out of the game.';
+  if (isHiding()) {
+    return p.role === 'seeker'
+      ? 'Held at the start line until hiding time ends.'
+      : 'Get hidden first — powers unlock when the seekers are released.';
+  }
   if (!gameState || gameState.status !== 'active') return 'Game is not running.';
   if (isPaused()) return 'Game is paused.';
   if (def.role !== p.role) return 'Wrong role.';

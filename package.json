@@ -7,7 +7,8 @@
     "deploy": "wrangler deploy",
     "test": "node test/e2e.mjs",
     "quota": "node test/quota.mjs",
-    "vendor:agents": "esbuild node_modules/agents/client.js --bundle --format=iife --global-name=AgentsClient --outfile=public/vendor/agents-client.js --minify"
+    "vendor:agents": "esbuild node_modules/agents/dist/client.js --bundle --format=iife --global-name=AgentsClient --outfile=public/vendor/agents-client.js --minify",
+    "vendor:qr": "esbuild node_modules/qrcode-generator/dist/qrcode.js --bundle --format=iife --global-name=qrcodegen --outfile=public/vendor/qrcode.js --minify"
   },
   "dependencies": {
     "agents": "^0.22.0"
@@ -15,6 +16,7 @@
   "devDependencies": {
     "esbuild": "^0.25.0",
     "playwright": "^1.50.0",
+    "qrcode-generator": "^2.0.4",
     "wrangler": "^4.0.0"
   }
 }

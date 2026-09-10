@@ -83,6 +83,9 @@ async function openPlayer(i, start) {
   // mock=1 pins the suite to the offline harness. Without it, now that real
   // credentials are in firebase-config.js, every run would write test games
   // into the live Firestore project.
+  // Mark help as already seen for most pages — the first-run modal is
+  // asserted once, explicitly, rather than clicked through on every page.
+  await p.addInitScript(() => { try { localStorage.setItem('h_seen_help', '1'); } catch (e) {} });
   await p.goto(`${ORIGIN}/?${STORE_PARAM}pid=p${i}&sim=${start.lat},${start.lng}`);
   pages.push(p);
   return p;
@@ -148,24 +151,88 @@ await host.waitForTimeout(500);
 const lobbyCount = await host.evaluate(() => Object.keys(playersState).length);
 check('all five players in lobby', lobbyCount === 5, `${lobbyCount} players`);
 
+// A first-time player gets the primer without asking for it.
+const primer = await host.evaluate(() => {
+  localStorage.removeItem('h_seen_help');
+  maybeShowFirstRunHelp();
+  const shown = document.getElementById('how-modal').style.display === 'flex';
+  const text = document.getElementById('how-body').textContent;
+  document.getElementById('how-modal').style.display = 'none';
+  return { shown, seen: localStorage.getItem('h_seen_help'), text };
+});
+check('first-time players are shown how to play',
+  primer.shown && primer.seen === '1' &&
+  /no tag button/i.test(primer.text) && /keep the screen on/i.test(primer.text),
+  primer.shown ? 'shown once, covers capture and screen-on' : 'not shown');
+
 // ---- roles: force a deterministic split (2 seekers, 3 hiders) ----
 await host.evaluate(async () => {
   const roles = { p0: 'seeker', p1: 'seeker', p2: 'hider', p3: 'hider', p4: 'hider' };
   await Promise.all(Object.entries(roles).map(([id, role]) => playerRef(id).update({ role })));
 });
-// Hiders pick loadouts.
+// Wait for each player to actually see their role before touching their
+// loadout — a human picks powers after being told what they are, and writing
+// both at once races in the offline store.
+for (let i = 0; i < 5; i++) {
+  await until(pages[i], () => !!(me() && me().role));
+}
 for (let i = 2; i < 5; i++) {
   await pages[i].evaluate(() => playerRef().update({
     loadout: ['go_quiet', 'smear', 'silent_run', 'decoy'],
   }));
+  await until(host, ([id]) => {
+    const p = playersState[id];
+    return !!(p && p.role === 'hider' && (p.loadout || []).length >= 3);
+  }, ['p' + i]);
 }
-await host.waitForTimeout(400);
 
-// ---- start, and skip the head start so seekers can act ----
+// Give hiding time a real duration — an earlier check set it to zero, which
+// would release the seekers the instant the game starts.
+await host.fill('#input-headstart', '3');
+await host.dispatchEvent('#input-headstart', 'change');
+await until(host, () => gameState && gameState.headstartMs === 180000);
+
+// ---- start: the lobby must refuse to start until everyone is ready ----
+const startReady = await until(host,
+  () => !document.getElementById('btn-start-game').disabled, null, 15000);
+const readyText = await host.evaluate(() => ({
+  ready: document.getElementById('ready-status').textContent,
+  roles: document.getElementById('roles-status').textContent,
+  loadouts: Object.fromEntries(Object.entries(playersState)
+    .map(([k, v]) => [k, `${v.role || '-'}:${(v.loadout || []).length}`])),
+}));
+check('start unlocks once every role and loadout is settled', startReady === true,
+  `${readyText.ready} | ${JSON.stringify(readyText.loadouts)}`);
+
 await host.click('#btn-start-game');
-await host.evaluate(() => gameRef().update({ seekersReleaseAt: Date.now() - 1 }));
 for (const p of pages) await p.waitForSelector('#view-game.active', { timeout: 8000 });
 check('game starts for all clients', true);
+
+// ---- hiding phase ----
+await until(host, () => gameState && gameState.status === 'hiding');
+const hidingStatus = await host.evaluate(() => gameState.status);
+check('starting begins hiding time, not the hunt', hidingStatus === 'hiding', hidingStatus);
+
+const seekerHeld = await pages[1].evaluate(() => powerBlockedReason('scan', me()));
+check('seekers cannot act during hiding time',
+  /Held at the start line/.test(seekerHeld), seekerHeld);
+
+// Hiders declare one at a time; only the last one should release the seekers.
+await pages[2].evaluate(() => declareHidden());
+await pages[3].evaluate(() => declareHidden());
+await host.waitForTimeout(1200);
+const stillHiding = await host.evaluate(() => gameState.status);
+check('seekers stay held while any hider is still moving', stillHiding === 'hiding', stillHiding);
+
+await pages[4].evaluate(() => declareHidden());
+await until(host, () => gameState && gameState.status === 'active', null, 15000);
+const released = await host.evaluate(() => ({
+  status: gameState.status,
+  early: gameState.releasedAt < gameState.hidingEndsAt,
+}));
+check('seekers release early once every hider declares hidden',
+  released.status === 'active' && released.early === true,
+  `status ${released.status}, released before the clock: ${released.early}`);
 
 await host.waitForTimeout(3000);
 
@@ -225,8 +292,10 @@ async function runPower(pageIdx, key, ctxArg) {
 }
 
 // -- Go quiet: the next ping is skipped, broadcastAt goes stale --
-const beforeQuiet = await host.evaluate(() => playersState.p2.broadcastAt);
 await runPower(2, 'go_quiet');
+// Sampled after arming: a routine ping between sampling and arming would
+// otherwise look like a failure.
+const beforeQuiet = await host.evaluate(() => playersState.p2.broadcastAt);
 await pages[2].evaluate(async () => {
   nextPingDueAt = 0;
   await new Promise((r) => setTimeout(r, 50));
@@ -237,7 +306,8 @@ const afterQuiet = await host.evaluate(() => ({
   at: playersState.p2.broadcastAt, mod: playersState.p2.pendingPingMod,
 }));
 check('go quiet skips the ping (position goes stale)',
-  afterQuiet.at === beforeQuiet && afterQuiet.mod === null);
+  afterQuiet.at === beforeQuiet && afterQuiet.mod === null,
+  `broadcastAt ${beforeQuiet} -> ${afterQuiet.at} (delta ${afterQuiet.at - beforeQuiet}ms), mod ${afterQuiet.mod}`);
 
 // -- Smear: next ping reports an arc --
 await runPower(2, 'smear');

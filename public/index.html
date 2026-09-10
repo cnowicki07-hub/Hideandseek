@@ -14,6 +14,8 @@
   <h1>Come out<br>come out<br>wherever you are</h1>
   <p class="tagline">Hide &amp; Seek</p>
 
+  <button id="btn-how-landing" class="secondary">How to play</button>
+
   <div class="card">
     <h2>Host a game</h2>
     <input id="input-name-host" placeholder="Your name">
@@ -41,8 +43,22 @@
 <div id="view-lobby" class="view">
   <h1>Lobby</h1>
   <p>Game code: <strong id="lobby-code" class="bigcode"></strong></p>
-  <p class="muted">Give this code to everyone joining.</p>
+  <p class="muted">Give this code to everyone joining, or let them scan.</p>
+
+  <div class="card qr-card">
+    <div id="qr-holder"></div>
+    <p class="muted" id="join-link"></p>
+  </div>
+
+  <div class="card" id="location-card">
+    <h2>Location</h2>
+    <p class="muted" id="location-status">Checking…</p>
+    <button id="btn-retry-location" class="secondary" style="display:none">Retry location</button>
+  </div>
+
   <ul id="lobby-players"></ul>
+
+  <button id="btn-how-lobby" class="secondary">How to play</button>
 
   <div class="card" id="role-card">
     <h2 id="role-title">Waiting for roles</h2>
@@ -100,6 +116,12 @@
     <span class="hud-item">Code <strong id="my-code">----</strong></span>
   </div>
   <div id="banner-strip"></div>
+
+  <div id="hiding-bar" style="display:none">
+    <div id="hiding-text"></div>
+    <button id="btn-declare-hidden">I'm hidden</button>
+  </div>
+
   <div id="map"></div>
 
   <div id="action-bar">
@@ -108,7 +130,9 @@
   </div>
 
   <button id="btn-locate" class="locate-fab" title="Centre the map on me">◎</button>
-  <button id="btn-panic" class="panic-fab">PANIC<br><span>hold</span></button>
+  <button id="btn-panic" class="safety-btn" title="Emergency — alerts everyone and ends your game">
+    <span class="safety-icon">✚</span><span class="safety-label">Help</span>
+  </button>
   <div id="targeting-prompt" class="targeting-prompt"></div>
   <div id="toast-host"></div>
 </div>
@@ -193,6 +217,17 @@
   </div>
 </div>
 
+<!-- HOW TO PLAY -->
+<div id="how-modal" class="modal">
+  <div class="modal-inner">
+    <h3>How to play</h3>
+    <div id="how-body" class="how"></div>
+    <div class="modal-buttons">
+      <button id="btn-close-how">Got it</button>
+    </div>
+  </div>
+</div>
+
 <!-- END -->
 <div id="view-end" class="view">
   <h1>Game Over</h1>
@@ -209,6 +244,7 @@
 
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/agents-client.js"></script>
+<script src="vendor/qrcode.js"></script>
 
 <script src="js/sim.js"></script>
 <script src="js/docops.js"></script>
