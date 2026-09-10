@@ -192,9 +192,53 @@ async function placeSignpost(text) {
   toast('Signpost placed.');
 }
 
+// Signs you have walked into. Kept per player and per game, and remembered
+// across a reload so a dropped connection does not un-discover the map.
+const discoveredSignposts = new Set();
+let discoveryLoadedFor = null;
+
+function signpostDiscoveryKey() { return `h_signs_${gameCode}`; }
+
+function loadSignpostDiscovery() {
+  if (discoveryLoadedFor === gameCode) return;
+  discoveryLoadedFor = gameCode;
+  discoveredSignposts.clear();
+  try {
+    JSON.parse(localStorage.getItem(signpostDiscoveryKey()) || '[]')
+      .forEach((id) => discoveredSignposts.add(id));
+  } catch (e) { /* first run, or storage unavailable */ }
+}
+
+// Called from the rules tick: anything you are standing next to is now known.
+function tickSignpostDiscovery() {
+  if (!myPos || !gameCode) return;
+  loadSignpostDiscovery();
+  let found = false;
+  Object.entries(signpostsState).forEach(([id, s]) => {
+    if (discoveredSignposts.has(id)) return;
+    if (distanceM(myPos, { lat: s.lat, lng: s.lng }) > CONFIG.signposts.discoverRadiusM) return;
+    discoveredSignposts.add(id);
+    found = true;
+  });
+  if (!found) return;
+  try {
+    localStorage.setItem(signpostDiscoveryKey(), JSON.stringify([...discoveredSignposts]));
+  } catch (e) { /* storage unavailable — discovery just won't survive a reload */ }
+  toast('You found a signpost.');
+}
+
+function signpostDiscovered(id) {
+  loadSignpostDiscovery();
+  return discoveredSignposts.has(id);
+}
+
+// Readable signs: ones you have already found, and are currently close
+// enough to read. You have to walk into a sign before it exists for you, so
+// the Signs button can never count one you have not discovered.
 function signpostsInRange(pos, now) {
   if (!pos) return [];
   return Object.entries(signpostsState)
+    .filter(([id]) => signpostDiscovered(id))
     .map(([id, s]) => ({ id, ...s, dist: distanceM(pos, { lat: s.lat, lng: s.lng }) }))
     .filter((s) => s.dist <= CONFIG.signposts.readRadiusM)
     .sort((a, b) => b.placedAt - a.placedAt);

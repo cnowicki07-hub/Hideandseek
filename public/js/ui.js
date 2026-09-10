@@ -308,15 +308,37 @@ function renderJoinQr() {
   }
 }
 
+// The lobby list doubles as the host's role controls: for the host every row
+// is a button that cycles that player unassigned -> seeker -> hider, so roles
+// can be set deliberately as well as rolled.
+const ROLE_CYCLE = [null, 'seeker', 'hider'];
+
 function renderLobbyList(players) {
   const list = el('lobby-players');
+  const iAmHost = !!(players[playerId] && players[playerId].isHost);
   list.innerHTML = '';
-  Object.values(players).forEach((p) => {
+  Object.entries(players).forEach(([id, p]) => {
     const li = document.createElement('li');
-    const bits = [p.name];
-    if (p.isHost) bits.push('(host)');
-    if (p.role) bits.push('— ' + p.role);
-    li.textContent = bits.join(' ');
+    const label = `${p.name}${p.isHost ? ' (host)' : ''}`;
+    const role = p.role ? p.role : 'no role';
+
+    if (!iAmHost) {
+      li.textContent = `${label} — ${role}`;
+      list.appendChild(li);
+      return;
+    }
+
+    li.className = 'row-pick';
+    const btn = document.createElement('button');
+    btn.className = 'role-pick secondary role-' + (p.role || 'none');
+    btn.innerHTML = `<span>${label}</span><span class="role-tag">${role}</span>`;
+    btn.title = 'Tap to change this player\'s role';
+    btn.onclick = async () => {
+      const next = ROLE_CYCLE[(ROLE_CYCLE.indexOf(p.role || null) + 1) % ROLE_CYCLE.length];
+      btn.disabled = true;
+      try { await setPlayerRole(id, next); } finally { btn.disabled = false; }
+    };
+    li.appendChild(btn);
     list.appendChild(li);
   });
 }
@@ -384,12 +406,19 @@ function renderHostLobbyStatus(players) {
     ? `${seekers} seeker(s), ${hiders} hider(s).`
     : `${all.length} player(s) here. Nobody has a role yet.`;
 
-  el('btn-start-game').disabled = !assigned || unassigned.length > 0;
+  // Hand-assignment makes a one-sided game possible in a way the random
+  // deal never did, so both sides have to actually exist before starting.
+  const lopsided = !seekers || !hiders;
+  el('btn-start-game').disabled = !assigned || unassigned.length > 0 || lopsided;
   el('ready-status').textContent = !assigned
-    ? 'Assign roles before starting.'
+    ? 'Assign roles before starting — tap a player, or roll them.'
     : unassigned.length
       ? `No role yet: ${unassigned.map((x) => x.name).join(', ')}.`
-      : 'Everyone is ready. Starting begins hiding time.';
+      : !seekers
+        ? 'Nobody is seeking. Tap a player to make them a seeker.'
+        : !hiders
+          ? 'Nobody is hiding. Tap a player to make them a hider.'
+          : 'Everyone is ready. Starting begins hiding time.';
 }
 
 // ---------- game status ----------
@@ -525,6 +554,9 @@ function renderBanners(p, now) {
     const dir = reading ? `${Math.round(reading.bearing)}° ±${Math.round(reading.coneHalfWidthDeg)}°` : 'no reading';
     items.push(['danger', `HUNTED by ${hunter ? hunter.name : 'a seeker'} — they are ${dir} from you.`]);
   });
+  const totemBanner = totemStatusBanner(p, now);
+  if (totemBanner) items.push(totemBanner);
+
   if (p.activeHunt && now < p.activeHunt.expiresAt) {
     const t = playersState[p.activeHunt.targetId];
     const reading = huntBearing(playerId, p.activeHunt.targetId, now);
@@ -878,7 +910,7 @@ function renderWorld() {
   }
 
   // Totems — everyone. Grey while being sabotaged, on both roles' maps.
-  Object.entries(totemsState).forEach(([id, t]) => {
+  Object.values(totemsState).forEach((t) => {
     if (t.status !== 'active') return;
     const sabotaging = isBeingSabotaged(t, now);
     add(L.circle([t.lat, t.lng], {
@@ -890,7 +922,7 @@ function renderWorld() {
     add(L.circleMarker([t.lat, t.lng], {
       radius: 6, color: sabotaging ? MAP.ash : MAP.totem,
       fillColor: sabotaging ? MAP.ashLit : MAP.totemLit, fillOpacity: 1,
-    }).bindTooltip(totemTooltip(id, t, p, now)));
+    }));
     // Precision ring: where you have to stand to sabotage.
     if (p.role === 'hider') {
       add(L.circle([t.lat, t.lng], {
@@ -913,13 +945,16 @@ function renderWorld() {
           color: look.color, fillColor: look.color,
           fillOpacity: look.opacity * 0.8, opacity: look.opacity,
           weight: 2, dashArray: '2 3',
-        }).bindTooltip(`Totem contact · ${Math.round((now - ping.at) / 1000)}s ago · exact`));
+        }));
       });
     });
   }
 
-  // Signposts — everyone, but only readable within range.
-  Object.values(signpostsState).forEach((s) => {
+  // Signposts — only the ones you have walked into. An undiscovered sign is
+  // not on your map at all, so leaving one somewhere out of the way is a
+  // genuine gamble that anybody ever finds it.
+  Object.entries(signpostsState).forEach(([id, s]) => {
+    if (!signpostDiscovered(id)) return;
     add(L.circleMarker([s.lat, s.lng], {
       radius: 4, color: MAP.wood, fillColor: MAP.woodLit, fillOpacity: 1,
     }));
@@ -932,7 +967,7 @@ function renderWorld() {
       radius: CONFIG.seekerPowers.tripwire.triggerRadiusM,
       color: tw.triggered ? MAP.ash : MAP.gloom,
       fill: false, weight: 1, dashArray: '2 4',
-    }).bindTooltip(tw.triggered ? 'Tripwire (sprung)' : 'Tripwire'));
+    }));
   });
 
   renderTrails(p, now, add);
@@ -954,7 +989,7 @@ function renderWorld() {
     }));
     add(L.circleMarker([travelDest.lat, travelDest.lng], {
       radius: 5, color: MAP.cold, fill: false, weight: 2,
-    }).bindTooltip(`${Math.round(travelDistanceRemaining())}m to go`));
+    }));
   }
 
   // Self — always exact, always visible.
@@ -969,25 +1004,36 @@ function renderWorld() {
   }
 }
 
-function totemTooltip(id, t, p, now) {
-  const bits = [`Totem (${Math.round(t.radiusM)}m)`];
-  if (p.role === 'hider') {
-    const present = freshPresenceIds(t, now).length;
-    const progress = effectiveSabotageProgressS(t, now);
-    const pct = Math.round((progress / t.requiredS) * 100);
-    if (present >= CONFIG.totem.sabotageMinParticipants) {
-      bits.push(`Sabotage ${pct}%`);
-    } else if (present === 1) {
-      bits.push('1 hider waiting — join them');
-    }
-    if (progress > 0 && present < CONFIG.totem.sabotageMinParticipants) {
-      bits.push(`decays in ${Math.round(sabotageDecaySecondsLeft(t, now))}s`);
-    }
-    if (!present) bits.push(`needs ${CONFIG.totem.sabotageMinParticipants} hiders, ${(t.requiredS / 60).toFixed(1)} min`);
-  } else if (t.placedBy === playerId) {
-    bits.push('yours — tap to retire');
+// Sabotage state used to hang off the totem as a map label. The map carries
+// no labels any more, so it reads out in the banner strip instead — and only
+// while you are actually standing at the totem, which is the only time it
+// tells you anything you can act on.
+function totemStatusBanner(p, now) {
+  if (!myPos) return null;
+  const precision = totemPrecisionRadiusM();
+  const entry = Object.entries(totemsState).find(([, t]) =>
+    t.status === 'active' && distanceM(myPos, { lat: t.lat, lng: t.lng }) <= precision);
+  if (!entry) return null;
+  const t = entry[1];
+
+  if (p.role !== 'hider') {
+    return t.placedBy === playerId ? ['info', 'Your totem — tap it to retire it.'] : null;
   }
-  return bits.join(' · ');
+
+  const present = freshPresenceIds(t, now).length;
+  const progress = effectiveSabotageProgressS(t, now);
+  if (present >= CONFIG.totem.sabotageMinParticipants) {
+    const pct = Math.round((progress / t.requiredS) * 100);
+    return ['info', `Sabotaging this totem — ${pct}%. Stay put.`];
+  }
+  if (progress > 0) {
+    return ['warn', `Sabotage held at ${Math.round((progress / t.requiredS) * 100)}%`
+      + ` — decays in ${Math.round(sabotageDecaySecondsLeft(t, now))}s.`
+      + ` Needs ${CONFIG.totem.sabotageMinParticipants} hiders here.`];
+  }
+  if (present === 1) return ['info', 'Another hider is waiting here — stay and start it.'];
+  return ['info', `Needs ${CONFIG.totem.sabotageMinParticipants} hiders standing here`
+    + ` for ${(t.requiredS / 60).toFixed(1)} min.`];
 }
 
 // Everything anyone sees of another player is their trail of paid-for pings:
@@ -1021,10 +1067,12 @@ function renderTrails(p, now, add) {
       }));
     }
 
+    // No label of any kind. Colour already says how old a reading is and
+    // green already says it is yours; a name over a dot would hand out
+    // identity the ping itself never carried.
     dots.forEach((dot) => {
       const look = pingAppearance(dot, now);
       if (!look) return;
-      const fresh = now - dot.at < 20000;
       add(L.circleMarker([dot.lat, dot.lng], {
         radius: CONFIG.ping.dotRadiusPx,
         color: isSelf ? MAP.own : look.color,
@@ -1032,10 +1080,7 @@ function renderTrails(p, now, add) {
         fillOpacity: look.opacity,
         opacity: look.opacity,
         weight: dot.exact ? 2 : 1,
-      }).bindTooltip(
-        `${isSelf ? 'You' : other.name} · ${Math.round((now - dot.at) / 1000)}s ago`
-          + (dot.exact ? ' · exact' : ''),
-        fresh ? { permanent: true, direction: 'top' } : {}));
+      }));
     });
   });
 }
@@ -1054,7 +1099,7 @@ function renderReveals(p, now, add) {
     reveals.disarm.points.forEach((pt) => {
       add(L.circleMarker([pt.lat, pt.lng], {
         radius: 7, color: MAP.ash, fillColor: MAP.bone, fillOpacity: 0.9,
-      }).bindTooltip('Tripwire destroyed'));
+      }));
     });
   }
 
@@ -1062,7 +1107,7 @@ function renderReveals(p, now, add) {
     reveals.snitch.entries.forEach((e) => {
       add(L.circleMarker([e.lat, e.lng], {
         radius: 8, color: MAP.violet, fillColor: MAP.violet, fillOpacity: 0.9,
-      }).bindTooltip(e.name, { permanent: true, direction: 'top' }));
+      }));
     });
   }
 

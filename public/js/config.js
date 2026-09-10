@@ -108,6 +108,11 @@ const CONFIG = {
   },
 
   signposts: {
+    // A sign is invisible until you walk into it. Once you have been this
+    // close it stays on your map for the rest of the game — you know it is
+    // there now. Discovery is per player and never shared, so a sign
+    // appearing on your map says nothing about where anyone else has been.
+    discoverRadiusM: 10,
     readRadiusM: 18,
     cost: 0,
     maxLength: 120,

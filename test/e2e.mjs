@@ -165,6 +165,34 @@ check('first-time players are shown how to play',
   /no tag button/i.test(primer.text) && /keep the screen on/i.test(primer.text),
   primer.shown ? 'shown once, covers capture and screen-on' : 'not shown');
 
+// ---- the host can set roles by hand, one player at a time ----
+// Every lobby row is a button for the host, cycling none -> seeker -> hider.
+const hostPicks = await host.evaluate(() =>
+  document.querySelectorAll('#lobby-players .role-pick').length);
+check('the host gets a role control on every player', hostPicks === 5, `${hostPicks} controls`);
+const guestPicks = await pages[2].evaluate(() =>
+  document.querySelectorAll('#lobby-players .role-pick').length);
+check('other players get no role controls', guestPicks === 0, `${guestPicks} controls`);
+
+// Tap Hide1's row twice: unassigned -> seeker -> hider.
+const rowIndex = await host.evaluate(() => Object.keys(playersState).indexOf('p2'));
+await host.evaluate((i) => document.querySelectorAll('#lobby-players .role-pick')[i].click(), rowIndex);
+const madeSeeker = await until(host, () => playersState.p2.role === 'seeker');
+check('tapping a player makes them a seeker', madeSeeker === true);
+await host.evaluate((i) => document.querySelectorAll('#lobby-players .role-pick')[i].click(), rowIndex);
+const madeHider = await until(host, () => playersState.p2.role === 'hider');
+check('tapping again makes them a hider', madeHider === true);
+
+// A hand-assigned game can be one-sided in a way a random deal never is,
+// so the lobby has to refuse it.
+await host.evaluate(async () => {
+  await Promise.all(['p0', 'p1', 'p3', 'p4'].map((id) => playerRef(id).update({ role: 'hider' })));
+});
+const refusedOneSided = await until(host, () =>
+  document.getElementById('btn-start-game').disabled
+  && /Nobody is seeking/.test(document.getElementById('ready-status').textContent));
+check('a game with nobody seeking cannot start', refusedOneSided === true);
+
 // ---- roles: force a deterministic split (2 seekers, 3 hiders) ----
 await host.evaluate(async () => {
   const roles = { p0: 'seeker', p1: 'seeker', p2: 'hider', p3: 'hider', p4: 'hider' };
@@ -300,6 +328,21 @@ const drift = await host.evaluate(() => {
 });
 check('a motionless player appears to move between pings', drift > 0,
   `${drift}m of apparent movement while standing still`);
+
+// -- Nothing on the map is labelled --
+// Dots used to carry a name and an age. Both are gone: colour says how old a
+// reading is, green says it is yours, and nothing says who anyone is.
+const mapLabels = await pages[1].evaluate(() => {
+  renderWorld();
+  const found = [];
+  worldLayer.eachLayer((layer) => {
+    const t = layer.getTooltip && layer.getTooltip();
+    if (t) found.push(String(t.getContent()));
+  });
+  return found;
+});
+check('nothing on the map carries a label', mapLabels.length === 0,
+  mapLabels.length ? mapLabels.join(' | ') : 'no labels on any layer');
 
 // -- Scan: directions only, one per hider, never a position --
 await runPower(1, 'scan');
@@ -657,12 +700,40 @@ check('clearing a mark also ends the seeker\'s hunt',
 
 // ================= TIER 5 / signposts, boundary, capture, end =================
 
+await teleport(3, off(0, 0));
 await pages[3].evaluate(() => placeSignpost('gate is unlocked'));
-await host.waitForTimeout(600);
+const placerSees = await until(pages[3], () => signpostsInRange(myPos).length > 0);
 const signRead = await pages[3].evaluate(() => signpostsInRange(myPos).map((s) => s.text));
-const signFar = await pages[4].evaluate(() => signpostsInRange(myPos).length);
-check('signposts are readable in range and invisible outside it',
-  signRead[0] === 'gate is unlocked' && signFar === 0);
+check('whoever leaves a sign has found it', placerSees === true && signRead[0] === 'gate is unlocked',
+  signRead.join(', ') || 'nothing readable');
+
+// 15m away is inside reading range but nobody has walked into the sign yet,
+// so as far as this player is concerned it does not exist.
+await teleport(4, off(15, 0));
+await pages[4].waitForTimeout(4500);
+const undiscovered = await pages[4].evaluate(() => ({
+  readable: signpostsInRange(myPos).length,
+  known: Object.keys(signpostsState).filter((id) => signpostDiscovered(id)).length,
+}));
+check('a sign you have never walked into is not on your map at all',
+  undiscovered.known === 0 && undiscovered.readable === 0,
+  `${undiscovered.known} known, ${undiscovered.readable} readable`);
+
+// Walk within 10m of it and it is yours.
+await teleport(4, off(6, 0));
+const discovered = await until(pages[4], () => signpostsInRange(myPos).length > 0, null, 15000);
+check('walking within 10m finds the sign', discovered === true);
+
+// And it stays found — walking off does not un-know it.
+await teleport(4, off(200, 0));
+await pages[4].waitForTimeout(3500);
+const afterLeaving = await pages[4].evaluate(() => ({
+  readable: signpostsInRange(myPos).length,
+  known: Object.keys(signpostsState).filter((id) => signpostDiscovered(id)).length,
+}));
+check('a found sign stays on your map but is only readable up close',
+  afterLeaving.known === 1 && afterLeaving.readable === 0,
+  `${afterLeaving.known} known, ${afterLeaving.readable} readable`);
 const signAnonymous = await pages[4].evaluate(() => {
   const s = Object.values(signpostsState)[0];
   return { hasText: !!s.text, authorSurfaced: false, authorStored: !!s.authorId };
@@ -755,6 +826,21 @@ const panic = await host.evaluate(() => ({
   msg: panicAlerts[0] && panicAlerts[0].message,
   exact: panicAlerts[0] && panicAlerts[0].lat != null,
 }));
+// The one exception to the unlabelled map: a panic marker says who it is,
+// permanently, because that is the whole point of it.
+const panicLabels = await host.evaluate(() => {
+  renderWorld();
+  const found = [];
+  worldLayer.eachLayer((layer) => {
+    const t = layer.getTooltip && layer.getTooltip();
+    if (t) found.push(String(t.getContent()));
+  });
+  return found;
+});
+check('a panic alert is the one thing on the map that is labelled',
+  panicLabels.length === 1 && /PANIC: Hide3/.test(panicLabels[0]),
+  panicLabels.join(' | ') || 'no label');
+
 check('panic broadcasts an exact position and message to everyone',
   panic.status === 'panicked' && panic.alerts === 1 && panic.exact &&
   panic.msg === 'twisted ankle by the fallen tree');

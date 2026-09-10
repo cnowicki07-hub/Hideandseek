@@ -83,6 +83,24 @@ await host.waitForTimeout(800);
 check('others join without a location prompt',
   (await host.evaluate(() => Object.keys(playersState).length)) === 4);
 
+// The indoor game is the same code and the same game document as the outdoor
+// one — the only difference is a set of CONFIG overrides keyed off the game's
+// mode. So a player who joins has to pick those up from the game itself, not
+// from having chosen the mode: if this drifts, joiners silently run the
+// outdoor clock inside a ten-minute round.
+const joinerCfg = await pages[1].evaluate(() => ({
+  mode: gameState.mode,
+  gameLen: CONFIG.gameLengthMin,
+  cooldown: CONFIG.charge.globalCooldownMs,
+  dotLife: CONFIG.ping.lifetimeMs,
+}));
+check('a joining player runs the same compressed config as the host',
+  joinerCfg.mode === 'livingroom'
+  && joinerCfg.gameLen === cfg.gameLenCfg
+  && joinerCfg.cooldown === cfg.cooldown
+  && joinerCfg.dotLife === cfg.dotLife,
+  `${joinerCfg.gameLen} min, cooldown ${joinerCfg.cooldown / 1000}s, dot ${joinerCfg.dotLife / 1000}s`);
+
 await host.evaluate(() => Promise.all([
   playerRef('p0').update({ role: 'seeker' }), playerRef('p1').update({ role: 'hider' }),
   playerRef('p2').update({ role: 'hider' }), playerRef('p3').update({ role: 'hider' }),

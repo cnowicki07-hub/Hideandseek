@@ -443,6 +443,13 @@ async function endPlayer(id, status) {
 
 // ---------- Host: lobby actions ----------
 
+// The host can set one player's role directly, which is the only way to run
+// a game where who seeks is not down to chance — someone new who should hide,
+// someone who has seeked twice in a row.
+async function setPlayerRole(id, role) {
+  await playerRef(id).update({ role: role || null });
+}
+
 async function assignRolesRandom(numSeekers) {
   const snap = await gameRef().collection('players').get();
   const ids = snap.docs.map((d) => d.id);
@@ -739,6 +746,8 @@ function tick() {
     tickTotems(p, now);
     tickBreachExposure(p, now);
   }
+  // Both roles can leave and read signs, so both roles discover them.
+  if (myPos) tickSignpostDiscovery();
   tickHunt(p, now);
   if (p.isHost) tickHostChecks(now);
 

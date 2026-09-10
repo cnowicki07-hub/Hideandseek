@@ -150,6 +150,22 @@ button.danger {
   border-left: 2px solid var(--blood-dim);
   margin-bottom: 5px; font-size: 14px;
 }
+/* For the host every row is a role control, so the row itself is the button
+   and the list keeps its own padding out of the way. */
+#lobby-players li.row-pick { padding: 0; border-left: none; background: none; }
+.role-pick {
+  display: flex; width: 100%; align-items: center; justify-content: space-between;
+  gap: 10px; margin: 0; padding: 11px 12px; font-size: 14px; text-align: left;
+  border-left: 2px solid var(--blood-dim);
+}
+.role-tag {
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--bone-dim); white-space: nowrap;
+}
+.role-pick.role-seeker { border-left-color: var(--blood-lit); }
+.role-pick.role-seeker .role-tag { color: var(--blood-lit); }
+.role-pick.role-hider { border-left-color: var(--rot); }
+.role-pick.role-hider .role-tag { color: var(--rot); }
 
 .checkline {
   display: flex; gap: 10px; align-items: flex-start;

@@ -15,10 +15,6 @@ so they don't get lost between sessions. Nothing in this file is implemented.
   row of the lobby list, and a kicked player needs to be told why they were
   dropped rather than silently losing state.
 
-- **Roles can only be assigned randomly.** The host needs to be able to set a
-  role per player as well — a tap on each lobby row cycling
-  unassigned → seeker → hider — with the random assign kept as the shortcut.
-
 - **The UI is too dark outdoors.** In bright daylight the map especially is
   hard to read: the horror theme darkens the tiles with a CSS filter, which is
   right indoors and wrong in a field. Open questions before building it:

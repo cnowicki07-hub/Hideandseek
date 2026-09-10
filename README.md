@@ -60,6 +60,23 @@ sabotage and capture. Timings are scaled by the same factor throughout
 play area is generated so there is nothing to set up. It needs no location
 permission at all.
 
+**They are one game, not two builds.** There is no separate indoor codebase:
+a living-room game is an ordinary game document with `mode: 'livingroom'` on
+it, served by the same Worker and the same Durable Object class, running the
+same `app.js`, `powers.js`, `world.js`, `hunt.js` and `ui.js`. The only
+difference is `applyGameMode('livingroom')` in `public/js/config.js`, which
+overrides a short, explicit list of CONFIG numbers — and every client applies
+it from the game document when it subscribes, host and joiners alike, so
+nobody can end up on the wrong clock.
+
+The practical consequence, which is the point of the mode: **change a rule
+and both versions change.** Edit game logic and the indoor game gets it for
+free. Edit a *number* and it lands indoors too, unless it is one of the
+values `applyGameMode` explicitly overrides — that list is right there in
+`config.js`, deliberately written out rather than computed, so it is obvious
+which numbers indoors reinterprets. So the living-room game is a genuine
+rehearsal for the outdoor one, not an approximation of it.
+
 ## 1. Run it locally
 
 ```
@@ -126,14 +143,15 @@ backend works. `living-room.mjs` runs a browser with **no geolocation
 permission granted at all**, which is the point: the indoor game has to work
 on a device with no usable GPS.
 
-The outdoor suite drives a full five-player game and asserts 87 rules:
+The outdoor suite drives a full five-player game and asserts 97 rules:
 that nothing pings on its own, the Probe's half-world sweep and the 30m
-error on what it reports, dot colour across its ten-minute life, every
-power's effect as seen from the *other* player's client, totem scaling and
-sabotage accrual/decay, hunt bearings, snitch fidelity bands, boundary
-breach exposure, capture, scoring, and that two concurrent transactions
-can't lose an update. Worth re-running after any change to
-`public/js/config.js`.
+error on what it reports, dot colour across its ten-minute life, that the
+map carries no label of any kind except a panic alert, every power's effect
+as seen from the *other* player's client, totem scaling and sabotage
+accrual/decay, hunt bearings, snitch fidelity bands, signpost discovery,
+hand-assigned roles, boundary breach exposure, capture, scoring, and that
+two concurrent transactions can't lose an update. Worth re-running after any
+change to `public/js/config.js`.
 
 ## 2. Deploy
 
@@ -152,9 +170,11 @@ prints the URL everyone opens. `wrangler login` first if you haven't.
    distance rule (totem radius, sabotage time, uncertainty cap, head
    start) scales from it. The lobby shows those numbers as you draw.
 3. Everyone else joins with the code, or scans the QR in the lobby.
-4. Host sets the seeker count, taps **Randomly Assign Roles**, then
-   **Start Game**. There is nothing to pick — everyone gets their whole
-   side's powers.
+4. Host sets the roles: **tap any player in the lobby list** to cycle them
+   through no role → seeker → hider, or set a seeker count and tap
+   **Assign Roles Randomly**. Both sides have to exist before the game will
+   start. There is nothing else to pick — everyone gets their whole side's
+   powers.
 5. That starts **hiding time**, not the hunt. Seekers are held; hiders walk
    out and tap **I'm hidden** when they're happy. Once everyone has
    declared — or the head start runs out — the seekers are released.
@@ -204,6 +224,13 @@ Dots age in colour: **white** at birth, shading to **bright red** over five
 minutes, then fading to nothing over five more. Your own trail is **green**,
 so you can always see exactly what you have given away.
 
+**Nothing on the map is labelled.** No names, no timestamps, no "12s ago" —
+colour is the only thing that tells you how fresh a reading is, and a dot
+never says whose it is. The single exception is a **panic alert**, which is
+named and permanent, because that one is not part of the game. Totem sabotage
+progress, which used to hang off the totem as a label, reads out in the banner
+strip while you are standing at it.
+
 Four readings skip the error and report the truth: a **tripwire**, a
 **totem**, a hider's **Seeker scan**, and a **panic alert**. Seekers' own
 trails are never jittered either.
@@ -211,6 +238,14 @@ trails are never jittered either.
 One thing still pings for free: **leaving the boundary**. Step outside and the
 game gives your position away over and over until you come back, and nothing
 you can buy will stop it.
+
+## Signposts
+
+A sign is invisible until you **walk within 10m of it**. After that it stays
+on your map for the rest of the game and you can read it from 18m. Discovery
+is per player and never shared, so a sign appearing on your map tells you
+nothing about where anybody else has been — and leaving one somewhere out of
+the way is a real gamble that anyone ever finds it.
 
 ## Where the numbers live
 
