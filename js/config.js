@@ -11,6 +11,19 @@ const CONFIG = {
   // beacon contagion, tripwires, totem pings, hunt bearings).
   tickMs: 3000,
 
+  // How often a client is allowed to push its position to Firestore.
+  // GPS fires about once a second; writing every fix costs roughly 88,000
+  // writes for a 90-minute five-player game, which blows the free Spark
+  // quota (20,000/day) about twenty minutes in. Throttling on movement is
+  // self-correcting: a position only goes stale while someone is standing
+  // still, and a stationary player's last position is still correct.
+  sync: {
+    minWriteIntervalMs: 5000,   // never write more often than this
+    keepaliveMs: 30000,         // ...but always write at least this often
+    movementThresholdM: 5,      // below this, treat the player as parked
+    tickKeepaliveMs: 60000,     // contact heartbeat when GPS is unavailable
+  },
+
   charge: {
     cap: 100,
     regenPerMs: 1 / 20000, // 1 point every 20 seconds

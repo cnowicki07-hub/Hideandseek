@@ -53,6 +53,8 @@
 
   // ---------- helpers ----------
 
+  const stats = { writes: 0, listenerEmits: 0, docReads: 0 };
+
   const DELETE_SENTINEL = { __delete: true };
 
   function clone(v) { return v === undefined ? undefined : JSON.parse(JSON.stringify(v)); }
@@ -82,6 +84,7 @@
   }
 
   function writeDoc(path, data, merge) {
+    stats.writes++;
     loadStore(); // pick up other tabs' writes before doing our own
     const incoming = stripSentinels(data);
     if (merge && store[path]) store[path] = Object.assign({}, store[path], incoming);
@@ -90,6 +93,7 @@
   }
 
   function updateDoc(path, data) {
+    stats.writes++;
     loadStore();
     const existing = store[path];
     if (!existing) throw new Error('No document to update: ' + path);
@@ -150,11 +154,14 @@
   }
 
   function emit(l) {
+    stats.listenerEmits++;
     if (l.isCollection) {
       let snaps = docsIn(l.path);
       if (l.filters.length) snaps = snaps.filter((s) => matches(s.data(), l.filters));
+      stats.docReads += snaps.length;
       l.cb(makeQuerySnap(snaps));
     } else {
+      stats.docReads += store[l.path] === undefined ? 0 : 1;
       l.cb(makeSnap(l.path, store[l.path]));
     }
   }
@@ -227,6 +234,11 @@
       return Promise.resolve(fn(tx)).then((r) => { notifyAll(); return r; });
     },
   };
+
+  // stats (declared above) is exposed so the harness can answer "how many
+  // Firestore reads/writes would a real game cost", which decides whether
+  // the free Spark quota survives an evening.
+  window.__dbStats = stats;
 
   window.__mockFirebase = {
     initializeApp: () => {},

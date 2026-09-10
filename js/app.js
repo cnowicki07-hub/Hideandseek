@@ -193,6 +193,21 @@ function startTracking() {
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
 }
 
+let lastPositionWrite = { lat: null, lng: null, at: 0 };
+let lastContactWrite = 0;
+
+// GPS fires far more often than the game needs. Write when the player has
+// actually moved, and otherwise only often enough to keep them marked as
+// in contact.
+function shouldWritePosition(here, now) {
+  const c = CONFIG.sync;
+  if (!lastPositionWrite.at) return true;
+  const since = now - lastPositionWrite.at;
+  if (since >= c.keepaliveMs) return true;
+  if (since < c.minWriteIntervalMs) return false;
+  return distanceM(lastPositionWrite, here) >= c.movementThresholdM;
+}
+
 function onPosition(pos) {
   const here = { lat: pos.coords.latitude, lng: pos.coords.longitude };
   myPos = here;
@@ -205,30 +220,35 @@ function onPosition(pos) {
   if (!p || p.status !== 'active') return;
   if (isPaused()) return;
 
-  playerRef().update({ realLat: here.lat, realLng: here.lng, realUpdatedAt: now, lastContactAt: now });
+  if (shouldWritePosition(here, now)) {
+    const update = { realLat: here.lat, realLng: here.lng, realUpdatedAt: now, lastContactAt: now };
+    // A seeker's broadcast rides along in the same write rather than costing
+    // a second one.
+    if (playerRole === 'seeker') Object.assign(update, seekerBroadcastFields(here, now, p));
+    playerRef().update(update);
+    lastPositionWrite = { lat: here.lat, lng: here.lng, at: now };
+  }
 
-  if (playerRole === 'seeker') {
-    updateSeekerBroadcast(here, now, p);
-    return;
-  }
-  if (playerRole === 'hider') {
-    maybeSendHiderPing(here, now, p);
-  }
+  if (playerRole === 'hider') maybeSendHiderPing(here, now, p);
 }
 
 // Seekers broadcast continuously at full accuracy, unless Go Dark is active
 // (and Uncloak can force them back — design doc 5.1/5.3).
-function updateSeekerBroadcast(here, now, p) {
+function seekerBroadcastFields(here, now, p) {
   if (isSeekerDark(p, now)) {
-    if (p.broadcastLat !== null) {
-      playerRef().update({ broadcastLat: null, broadcastLng: null, broadcastAt: now });
-    }
-    return;
+    if (p.broadcastLat === null) return {};
+    return { broadcastLat: null, broadcastLng: null, broadcastAt: now };
   }
-  playerRef().update({
+  return {
     broadcastLat: here.lat, broadcastLng: here.lng,
     broadcastRadiusM: 0, broadcastAt: now, broadcastMode: 'circle',
-  });
+  };
+}
+
+function updateSeekerBroadcast(here, now, p) {
+  const fields = seekerBroadcastFields(here, now, p);
+  if (!Object.keys(fields).length) return;
+  playerRef().update(fields);
 }
 
 function isSeekerDark(p, now) {
@@ -270,19 +290,19 @@ function maybeSendHiderPing(here, now, p) {
   // penalty for being caught inside it (design doc 5.3).
   if (isInsideActiveCordon(here, now)) {
     sendHiderPing(here, now, p, { forceExact: true });
-    nextPingDueAt = now + CONFIG.tickMs;
+    nextPingDueAt = now + CONFIG.sync.minWriteIntervalMs;
     return;
   }
   // Boundary breach forces full exposure for the countdown (design doc 11).
   if (p.breachStartedAt) {
     sendHiderPing(here, now, p, { forceExact: true });
-    nextPingDueAt = now + CONFIG.tickMs;
+    nextPingDueAt = now + CONFIG.sync.minWriteIntervalMs;
     return;
   }
   // A beaconed hider is lit up continuously at exact position.
   if (p.beaconedUntil && now < p.beaconedUntil) {
     sendHiderPing(here, now, p, { forceExact: true });
-    nextPingDueAt = now + CONFIG.tickMs;
+    nextPingDueAt = now + CONFIG.sync.minWriteIntervalMs;
     return;
   }
 
@@ -657,7 +677,11 @@ function tick() {
   if (!p) return;
   const now = Date.now();
 
-  if (p.status === 'active') {
+  // Contact heartbeat, for when GPS is unavailable and no position write is
+  // happening. A position write already refreshes lastContactAt.
+  if (p.status === 'active' &&
+      now - Math.max(lastPositionWrite.at, lastContactWrite) >= CONFIG.sync.tickKeepaliveMs) {
+    lastContactWrite = now;
     playerRef().update({ lastContactAt: now }).catch(() => {});
   }
   if (!gameState || gameState.status !== 'active' || isPaused()) { refreshHud(); return; }
@@ -673,7 +697,14 @@ function tick() {
     maybeSendHiderPing(myPos, now, p);
   }
   if (playerRole === 'seeker' && myPos) {
-    if (!isSeekerDark(p, now)) updateSeekerBroadcast(myPos, now, p);
+    // Only correct a mismatch — Go Dark starting or lapsing. Steady-state
+    // broadcasting rides on the position write.
+    const shouldBeDark = isSeekerDark(p, now);
+    const isBroadcasting = p.broadcastLat !== null;
+    if (shouldBeDark === isBroadcasting) {
+      updateSeekerBroadcast(myPos, now, p);
+      lastPositionWrite = { lat: myPos.lat, lng: myPos.lng, at: now };
+    }
   }
 
   tickHunt(p, now);

@@ -71,6 +71,17 @@ several minutes before they're released.
 Drop `?mock=1` and the same tabs talk to the real Firestore project, which
 is how you check two actual phones can see each other.
 
+### Quota check
+
+```
+node test/quota.mjs
+```
+
+Walks five simulated players for a minute, counts Firestore writes and
+projects them onto a 90-minute game. Worth re-running after any change to
+how often the client writes — see [Staying inside the free
+tier](#staying-inside-the-free-tier).
+
 ### Automated check
 
 ```
@@ -164,6 +175,30 @@ outdoors, on real phones, before the real game:
       the one that depends on real GPS precision, and if 10m proves too
       tight in practice, raise `baseAccuracyRadiusM` in `js/config.js`
       (it widens the sabotage ring with it)
+
+## Staying inside the free tier
+
+Firestore's free Spark plan allows 20,000 writes and 50,000 reads a day.
+That sounds like plenty and is not: the first version wrote a player's
+position on every GPS fix, roughly once a second each, which measured at
+**~88,000 writes for a single 90-minute five-player game**. It would have
+stopped working about twenty minutes in, mid-game, on a Friday evening.
+
+Position writes are now throttled on movement (`CONFIG.sync`): write at
+most every 5s, and only if the player has actually moved 5m, with a
+keepalive every 30s regardless. This is self-correcting rather than a
+straight sample-rate cut — a position only goes stale while someone is
+standing still, and a stationary player's last position is still correct.
+A seeker's continuous broadcast now rides along in the same write instead
+of costing a second one.
+
+That brings a full game to roughly **5,100 writes and an estimated 25,000
+reads** — inside the free tier with room to spare. `node test/quota.mjs`
+measures it.
+
+If you ever do go over, the fix is to enable the Blaze (pay-as-you-go)
+plan: at these volumes the bill is a few pence, and it removes the cliff
+where the game simply stops mid-round.
 
 ## Security note
 
