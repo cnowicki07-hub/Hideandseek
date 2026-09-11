@@ -23,6 +23,7 @@ let playersState = {};
 let totemsState = {};
 let tripwiresState = {};
 let signpostsState = {};
+let chatState = {};
 
 let myPos = null;              // latest real GPS fix for this device
 let recentFixes = [];          // for movement-state detection
@@ -144,6 +145,9 @@ async function joinGame(code, name, isHost) {
       outOfBoundsReadings: 0,
       breachStartedAt: 0,
       declaredHiddenAt: null,
+      tauntScore: 0,
+      tauntCooldownUntil: 0,
+      track: [],
       closedAt: 0,
       pingDebt: 0,
       nextDebtPingAt: 0,
@@ -287,11 +291,28 @@ function onPosition(pos) {
   // capture range, boundary, probe geometry) have something to work with. It
   // is never displayed to anyone — only paid-for pings are.
   if (shouldWritePosition(here, now)) {
-    playerRef().update({
+    const update = {
       realLat: here.lat, realLng: here.lng, realUpdatedAt: now, lastContactAt: now,
-    });
+    };
+    // A coarser second sample, kept only so the walk-through at the end can
+    // draw where everybody actually went. It is written alongside the
+    // position rather than as its own write, so it costs no extra traffic.
+    const track = trackWith(p, here, now);
+    if (track) update.track = track;
+    playerRef().update(update);
     lastPositionWrite = { lat: here.lat, lng: here.lng, at: now };
   }
+}
+
+// Appends to the replay track if enough time has passed, and returns null if
+// not, so the caller can leave the field alone.
+function trackWith(p, here, now) {
+  if (!isPlaying()) return null;
+  const c = CONFIG.replay;
+  const track = p.track || [];
+  const last = track[track.length - 1];
+  if (last && now - last.at < c.minIntervalMs) return null;
+  return track.concat([{ lat: here.lat, lng: here.lng, at: now }]).slice(-c.maxPoints);
 }
 
 // ---------- Pings ----------
@@ -593,6 +614,48 @@ async function sendPanic(message) {
   await endPlayer(playerId, 'panicked');
 }
 
+// ---------- Keeping the screen on ----------
+//
+// "Screen must stay on" was the loudest limitation in this build: a phone
+// that sleeps stops reporting, and on iOS that used to mean the only fix was
+// telling people to set their auto-lock to Never. Safari 16.4 shipped the
+// Wake Lock API, so on anything current this is now handled.
+//
+// It has to be requested from inside a tap — same rule as geolocation — and
+// iOS drops the lock whenever the tab is backgrounded, so it is re-taken on
+// the way back. Older phones simply fall through and the old advice stands.
+
+let wakeLock = null;
+
+async function keepScreenAwake() {
+  if (!('wakeLock' in navigator)) return false;
+  if (wakeLock) return true;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+    return true;
+  } catch (e) {
+    wakeLock = null;      // refused, or the battery is too low for it
+    return false;
+  }
+}
+
+function releaseScreenAwake() {
+  if (!wakeLock) return;
+  try { wakeLock.release(); } catch (e) { /* already gone */ }
+  wakeLock = null;
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  // Coming back from the lock screen: retake the lock, and let the tick
+  // notice how long we were away so the debt is charged.
+  if (isPlaying() && me() && me().status === 'active' && !phoneClosed) {
+    keepScreenAwake();
+    noticeMissedTime(Date.now());
+  }
+});
+
 // ---------- Open and closed ----------
 //
 // A phone can stop reporting two ways: its owner closes it deliberately, or
@@ -642,6 +705,7 @@ async function closePhone() {
   watchId = null;
   stopTravel();
   if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  releaseScreenAwake();
   renderClosedState();
 }
 
@@ -656,6 +720,7 @@ async function openPhone() {
   lastSeenAlive = now;
   startTracking();
   startTick();
+  keepScreenAwake();
   renderClosedState();
   return gap;
 }
@@ -890,6 +955,12 @@ function subscribeToWorld() {
     snap.forEach((d) => { s[d.id] = d.data(); });
     signpostsState = s;
     safely('world', renderWorld);
+  });
+  gameRef().collection('chat').onSnapshot((snap) => {
+    const c = {};
+    snap.forEach((d) => { c[d.id] = d.data(); });
+    chatState = c;
+    safely('chat', renderChat);
   });
   gameRef().collection('events').onSnapshot((snap) => {
     const evts = [];

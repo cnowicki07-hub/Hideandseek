@@ -144,14 +144,18 @@ backend works. `living-room.mjs` runs a browser with **no geolocation
 permission granted at all**, which is the point: the indoor game has to work
 on a device with no usable GPS.
 
-The outdoor suite drives a full five-player game and asserts 145 rules:
+The outdoor suite drives a full five-player game and asserts 177 rules:
 that nothing pings on its own, the Probe's half-world sweep and the 30m
 error on what it reports, dot colour across its ten-minute life, that the
 map carries no label of any kind except a panic alert, every power's effect
 as seen from the *other* player's client, totem scaling and sabotage
 accrual/decay, hunt readings and the two powers that answer them, snitch
 fidelity bands, signpost discovery,
-hand-assigned roles, daylight mode, I SEE YOU appearing at 20m and letting
+hand-assigned roles, daylight mode, the key explaining itself from this
+game's own numbers, dot labels toggling, a tap still landing where you pointed
+on a compass-rotated map, a found sign putting itself on screen, fireworks
+appearing for everyone and leaving nothing behind, hiders-only chat, the
+end-of-game walk-through of true movement, I SEE YOU appearing at 20m and letting
 every tap through, closing a phone and the yellow-ringed stale readings and
 repayment debt that follow, being greyed out and reinstated, boundary breach
 exposure, capture, scoring, that every distance rule still relates sensibly to
@@ -253,6 +257,11 @@ never covers the safety equipment.
 Plus **Snitch** (20), which only unlocks while you are being hunted: sell out
 another hider to the seeker chasing you. They are never told it was you.
 
+**There is no cooldown between powers.** Charge is the whole limiter: the
+regen rate already decides how often anyone can act, and a minute of enforced
+silence on top of it only made people miss the moment they had been saving
+for. Spend it as fast as you can earn it.
+
 **The Hunt** costs no charge at all — it is gated on the game going ten
 minutes without a capture, and it is the answer to a stalemate rather than a
 power. A seeker declares it on one hider, and for the next ten minutes that
@@ -298,6 +307,76 @@ trails are never jittered either.
 One thing still pings for free: **leaving the boundary**. Step outside and the
 game gives your position away over and over until you come back, and nothing
 you can buy will stop it.
+
+## Reading the map
+
+People kept asking the map what its colours meant, so now it tells them. The
+**KEY** button opens a panel built from the same palette and the same CONFIG
+the map draws from — it cannot drift out of date, and it quotes *this* game's
+distances rather than a rule of thumb from a 600m map. Dots, rings, the
+boundary, totems, tripwires, signposts, the Scan glow: all of it, named.
+
+Two display toggles live in there, next to the things they toggle:
+
+- **Names and ages on dots.** Back on by default. Only the freshest dot per
+  player is labelled — labelling a whole trail turns the map into a wall of
+  text. One tap turns them off again if you preferred the map clean.
+- **Turn the map to face the way I am going.** Heading-up rather than
+  north-up, which is how most people actually read a map while walking. The
+  compass needle on the map controls shows your heading either way.
+
+Rotating a Leaflet map is not free: its own idea of where a tap landed is
+wrong the moment you do it, and `getBoundingClientRect` on a rotated element
+returns the box *around* the rotation — for a quarter turn the width and
+height swap. So taps are read off the container first and un-rotated by hand
+before Leaflet sees them, and the map is scaled up just enough to keep its
+corners off the screen. The suite checks a tap still lands where the finger
+pointed, at the centre and off it.
+
+## Signs
+
+A signpost you walk into now goes **up on your screen by itself**, written in
+blood on a board, dismissed with its X. A 4px dot on a map and a one-line
+toast was never going to make anyone stop and read what somebody left them.
+It still doesn't say who wrote it.
+
+## Taunts
+
+**Taunt** sets off a firework where a hider is standing: a random shape and
+colour, five seconds, visible to everyone including the seekers. Then it is
+gone, and there is nothing left on the map — it is drawn *over* the map rather
+than into it, so there is no trace to remove.
+
+It costs no charge, because charge buys information and this buys none. A
+firework tells a seeker that somebody nearby is pleased with themselves and
+nothing else; the position it goes off at is not recorded anywhere, and
+chasing one is a waste of a seeker's legs. The only limiter is a 30-second
+cooldown, so it stays an event rather than a strobe.
+
+Taunts are counted on **their own ladder** at the end, printed under the
+scoreboard and never mixed into survival time. Being insufferable is its own
+category.
+
+## Hider chat
+
+A **Hiders** button, and a chat only the hiding side can read. Warn someone a
+seeker just walked past you, agree to meet at a totem, or gloat. Seekers get
+no button and cannot post. Like every other rule in this build it is enforced
+by the client, so a seeker with dev tools could read it — the same trade the
+rest of the game makes.
+
+## The walk-through
+
+For the whole game nobody sees anything they did not pay for. At the end,
+everybody sees everything: the end screen carries a map of **every player's
+true movement for the entire round**, one coloured line each, hollow circle
+where they started and solid where they finished, plus **every signpost
+anybody left** whether or not you ever found it.
+
+This is where the stories are — who walked straight past whom, who sat in the
+same bush for an hour, whose decoy nobody ever fell for. True positions are
+sampled every 15 seconds into a capped 400-point track written alongside the
+position updates that were happening anyway, so it costs no extra traffic.
 
 ## Daylight mode
 
@@ -412,6 +491,27 @@ disarm that can't clear a wire or bands that overlap. The suite sweeps every
 rule across nine map sizes from 100m to 3km and asserts those relationships
 hold at all of them.
 
+## Phones
+
+**iOS** needed specific work and got it. Safari's toolbars grow and shrink the
+viewport as you scroll, which used to leave the action bar under the home
+indicator half the time — the layout is on `100dvh` now, with
+`-webkit-fill-available` behind it for iOS 15, and the HUD and action bar carry
+`env(safe-area-inset-*)` padding so nothing hides behind the notch or the home
+bar. Every control is `touch-action: manipulation`, which kills the 300ms tap
+delay and double-tap-to-zoom; rubber-band scrolling and the grey tap flash are
+off.
+
+The app also takes a **screen wake lock** from the same tap that asks for
+location — both have to come from a gesture on iOS — and retakes it when you
+come back from the lock screen, so the phone stops sleeping mid-game. Add it
+to the home screen (Share → Add to Home Screen) and it runs without Safari's
+chrome, which is the only way the map gets the whole display.
+
+The compass needs its own permission on iOS, asked for when you first turn it
+on, and reads `webkitCompassHeading` where it exists — that is a true heading,
+unlike the `alpha` everyone else reports, which counts the other way round.
+
 ## Where the numbers live
 
 `public/js/config.js` is the single source of truth, ported from design doc
@@ -523,11 +623,15 @@ authoritative checks into `src/server.js` is the obvious next step.
 
 ## Known limitations of this build
 
-- Screen must stay on and the tab must stay in the foreground while you are
-  playing — backgrounding pauses GPS updates on most phones. That is now a
-  handled state rather than a silent failure: the game notices the gap, marks
-  what everyone knows about you as stale, and charges you for it. See
+- The tab must stay in the foreground while you are playing — backgrounding
+  pauses GPS updates on most phones. That is a handled state rather than a
+  silent failure: the game notices the gap, marks what everyone knows about
+  you as stale, and charges you for it. See
   [Closing your phone](#closing-your-phone).
+- The screen staying on is now mostly handled too. The app takes a **screen
+  wake lock** (iOS 16.4+, Android Chrome) from the same tap that asks for
+  location — both have to come from a gesture — and retakes it when you come
+  back from the lock screen. On anything older, set auto-lock to Never.
 - No cheat-prevention: there is no server, so every rule is enforced by
   each player's own client against itself. A technically-minded player
   could open dev tools and read or write game state directly, including

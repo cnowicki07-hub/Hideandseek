@@ -192,6 +192,80 @@ async function placeSignpost(text) {
   toast('Signpost placed.');
 }
 
+// ---------- Taunts ----------
+//
+// A firework. It buys nothing, reveals nothing, and is gone in five seconds
+// leaving no trace on the map — which is the point: it is the one thing in
+// this game a hider can do purely to be insufferable. Everyone sees it,
+// nobody learns anything from it except that somebody nearby is enjoying
+// themselves, and it is scored on its own ladder so bravado never competes
+// with survival.
+
+const FIREWORK_SHAPES = ['burst', 'ring', 'willow', 'comet', 'spiral'];
+const FIREWORK_COLOURS = [
+  '#ff4d4d', '#ffd24d', '#4dd2ff', '#a94dff',
+  '#4dff88', '#ff8c4d', '#ff4dc4', '#8cff4d',
+];
+
+function tauntAvailableReason(p, now) {
+  now = now || Date.now();
+  if (!p || p.role !== 'hider') return 'Hiders only.';
+  if (p.status !== 'active') return 'You are out of the game.';
+  if (!gameState || gameState.status !== 'active') return 'Not while the game is not running.';
+  if (isPaused()) return 'Game is paused.';
+  if (!myPos) return 'No GPS fix yet.';
+  const left = (p.tauntCooldownUntil || 0) - now;
+  if (left > 0) return `Another in ${Math.ceil(left / 1000)}s.`;
+  return null;
+}
+
+// The shape and colour are rolled by the person setting it off and written
+// down, so every phone draws the same firework rather than five different
+// ones in five different colours.
+async function sendTaunt(message) {
+  const p = me();
+  const now = Date.now();
+  const blocked = tauntAvailableReason(p, now);
+  if (blocked) { toast(blocked); return false; }
+
+  await playerRef().update({
+    tauntCooldownUntil: now + CONFIG.taunt.cooldownMs,
+    tauntScore: (p.tauntScore || 0) + 1,
+  });
+  await pushEvent({
+    type: 'taunt',
+    name: p.name,
+    message: (message || '').slice(0, 60),
+    lat: myPos.lat, lng: myPos.lng,
+    shape: FIREWORK_SHAPES[Math.floor(Math.random() * FIREWORK_SHAPES.length)],
+    colour: FIREWORK_COLOURS[Math.floor(Math.random() * FIREWORK_COLOURS.length)],
+  });
+  return true;
+}
+
+// ---------- Hider chat ----------
+//
+// Hiders can talk; seekers cannot read it. Enforced on the client like every
+// other rule in this build, which means a seeker with dev tools can read it —
+// the same trade the rest of the game makes.
+
+async function sendChat(text) {
+  const body = (text || '').trim().slice(0, CONFIG.chat.maxLength);
+  if (!body) return false;
+  const p = me();
+  if (!p || p.role !== 'hider') { toast('Hiders only.'); return false; }
+  await gameRef().collection('chat').add({
+    from: playerId, name: p.name, text: body, at: Date.now(),
+  });
+  return true;
+}
+
+function chatMessages() {
+  return Object.values(chatState)
+    .sort((a, b) => a.at - b.at)
+    .slice(-CONFIG.chat.maxMessages);
+}
+
 // ---------- I SEE YOU ----------
 //
 // Distance to the closest active seeker, from true positions — this is a
@@ -238,18 +312,20 @@ function loadSignpostDiscovery() {
 function tickSignpostDiscovery() {
   if (!myPos || !gameCode) return;
   loadSignpostDiscovery();
-  let found = false;
+  const found = [];
   Object.entries(signpostsState).forEach(([id, s]) => {
     if (discoveredSignposts.has(id)) return;
     if (distanceM(myPos, { lat: s.lat, lng: s.lng }) > CONFIG.signposts.discoverRadiusM) return;
     discoveredSignposts.add(id);
-    found = true;
+    found.push(s.text);
   });
-  if (!found) return;
+  if (!found.length) return;
   try {
     localStorage.setItem(signpostDiscoveryKey(), JSON.stringify([...discoveredSignposts]));
   } catch (e) { /* storage unavailable — discovery just won't survive a reload */ }
-  toast('You found a signpost.');
+  // Put it on the screen rather than on the map. A 4px dot and a toast was
+  // never going to make anyone stop and read what was left for them.
+  found.forEach((text) => showFoundSign(text));
 }
 
 function signpostDiscovered(id) {

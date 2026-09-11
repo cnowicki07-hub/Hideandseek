@@ -3,6 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<!-- iOS: added to the home screen this runs without Safari's chrome, which
+     is the only way the map gets the whole screen and the toolbars stop
+     resizing the viewport mid-game. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hide &amp; Seek">
+<meta name="theme-color" content="#06060a">
+<meta name="format-detection" content="telephone=no">
 <title>Hide and Seek</title>
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
 <link rel="stylesheet" href="css/style.css">
@@ -157,8 +166,27 @@
     <div id="action-buttons"></div>
   </div>
 
-  <button id="btn-daylight" class="locate-fab daylight-fab" title="Brighten the screen for daylight">☀</button>
-  <button id="btn-locate" class="locate-fab" title="Centre the map on me">◎</button>
+  <!-- Map controls, one column, ordered by how often they get used. -->
+  <div id="map-controls">
+    <button id="btn-key" class="map-fab" title="What the colours mean">KEY</button>
+    <button id="btn-compass" class="map-fab" title="Turn the map to face the way you are going">
+      <span class="compass-rose"><span class="compass-needle"></span></span>
+    </button>
+    <button id="btn-daylight" class="map-fab" title="Brighten the screen for daylight">☀</button>
+    <button id="btn-locate" class="map-fab" title="Centre the map on me">◎</button>
+  </div>
+
+  <!-- The key. Everything on the map, explained, with the two display
+       toggles sitting next to the things they toggle. -->
+  <div id="key-panel">
+    <div class="key-head">
+      <h3>Key</h3>
+      <button id="btn-close-key" class="icon-btn" aria-label="Close the key">✕</button>
+    </div>
+    <div id="key-body"></div>
+  </div>
+
+  <div id="firework-layer"></div>
   <button id="btn-panic" class="safety-btn" title="Emergency — alerts everyone and ends your game">
     <span class="safety-icon">✚</span><span class="safety-label">Help</span>
   </button>
@@ -174,6 +202,47 @@
       what they have of you is going stale, and it will show as stale.</p>
     <p class="warn" id="closed-cost"></p>
     <button id="btn-open-phone">I'm back</button>
+  </div>
+</div>
+
+<!-- A SIGN, FOUND -->
+<!-- Walk into a signpost and it goes up on your screen by itself. Nobody was
+     going to tap a 4px dot to find out somebody had left them a message. -->
+<div id="sign-found">
+  <div class="sign-board">
+    <button id="btn-close-sign" class="icon-btn sign-close" aria-label="Put the sign down">✕</button>
+    <p class="sign-hand" id="sign-found-text"></p>
+    <p class="sign-foot">Left by someone. They are not saying who.</p>
+  </div>
+</div>
+
+<!-- TAUNT MODAL -->
+<div id="taunt-modal" class="modal">
+  <div class="modal-inner">
+    <h3>Set something off</h3>
+    <p class="muted">A firework, where you are standing, for five seconds.
+      Everyone sees it. It tells them nothing except that you are enjoying
+      yourself — and it leaves nothing behind.</p>
+    <ul id="taunt-list" class="pick-list"></ul>
+    <input id="input-taunt" maxlength="60" placeholder="Or say something of your own">
+    <div class="modal-buttons">
+      <button id="btn-cancel-taunt" class="secondary">Cancel</button>
+      <button id="btn-send-taunt">Light it</button>
+    </div>
+  </div>
+</div>
+
+<!-- HIDER CHAT -->
+<div id="chat-modal" class="modal">
+  <div class="modal-inner chat-inner">
+    <h3>Hiders</h3>
+    <p class="muted">Everyone still hiding can read this. The seekers cannot.</p>
+    <ul id="chat-log"></ul>
+    <input id="input-chat" maxlength="160" placeholder="Say something">
+    <div class="modal-buttons">
+      <button id="btn-close-chat" class="secondary">Close</button>
+      <button id="btn-send-chat">Send</button>
+    </div>
   </div>
 </div>
 
@@ -273,6 +342,15 @@
   <h1>Game Over</h1>
   <p id="end-summary" class="muted"></p>
   <ol id="scoreboard" class="scoreboard"></ol>
+  <p class="muted" id="taunt-board"></p>
+
+  <div class="card">
+    <h2>Where everyone went</h2>
+    <p class="muted">Every true position, for the whole game, and every sign
+      anybody left. This is the only time the game shows you this.</p>
+    <div id="replay-map"></div>
+    <div id="replay-legend"></div>
+  </div>
 
   <div class="card">
     <h2>Another round?</h2>

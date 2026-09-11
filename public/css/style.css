@@ -28,12 +28,26 @@
 
 * { box-sizing: border-box; }
 
+/* iOS, specifically. Safari's toolbars shrink and grow the viewport as you
+   scroll, so a plain 100% height leaves the action bar under the home
+   indicator half the time. dvh is the fix on iOS 16+; -webkit-fill-available
+   covers 15. Both are stated, largest wins. */
 html, body {
-  margin: 0; padding: 0; height: 100%;
+  margin: 0; padding: 0;
+  height: 100%;
+  height: -webkit-fill-available;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--void); color: var(--bone);
   -webkit-text-size-adjust: 100%;
+  /* No rubber-band scroll behind the map, and no grey flash on every tap. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
 }
+@supports (height: 100dvh) {
+  html, body { height: 100dvh; }
+}
+/* Kills the 300ms wait and the double-tap-to-zoom on every control. */
+button, .power, input, select, a { touch-action: manipulation; }
 
 /* Grain + vignette over everything, never intercepting taps. */
 body::after {
@@ -49,7 +63,10 @@ body::after {
 .view.active { display: block; }
 
 #view-landing, #view-lobby, #view-end {
-  padding: 20px 16px 48px; overflow-y: auto;
+  padding: calc(20px + env(safe-area-inset-top)) 16px
+           calc(48px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ---------- type ---------- */
@@ -197,7 +214,9 @@ button.danger {
 
 #hud {
   display: flex; gap: 12px; align-items: center; justify-content: space-between;
-  padding: 10px 12px; font-size: 12px; flex-wrap: wrap;
+  /* Clears the notch and the status bar when installed to the home screen. */
+  padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
+  font-size: 12px; flex-wrap: wrap;
   background: linear-gradient(180deg, #14090c 0%, #000 100%);
   border-bottom: 1px solid var(--edge-lit);
   letter-spacing: 0.06em; text-transform: uppercase;
@@ -251,7 +270,9 @@ button.danger {
 
 #action-bar {
   background: linear-gradient(180deg, #000 0%, #0d0a0d 100%);
-  border-top: 1px solid var(--edge-lit); padding: 8px;
+  border-top: 1px solid var(--edge-lit);
+  /* Above the home indicator, not under it. */
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
 }
 #power-buttons { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
 #power-buttons .power {
@@ -278,15 +299,90 @@ button.danger {
   border-color: var(--edge-lit); color: #fff;
 }
 
-.locate-fab {
+/* One column of map controls, bottom-right, above the action bar and clear
+   of the Help button's corner. Ordered by how often a thumb reaches them. */
+#map-controls {
   position: absolute; right: 12px; bottom: 200px;
+  display: flex; flex-direction: column-reverse; gap: 8px;
+  z-index: 900;
+}
+.map-fab {
   width: 44px; height: 44px; border-radius: 50%; margin: 0; padding: 0;
   background: #0b0b0f; border: 1px solid var(--edge-lit); color: var(--bone);
-  font-size: 20px; line-height: 1; letter-spacing: 0;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.8); z-index: 900;
+  font-size: 19px; line-height: 1; letter-spacing: 0;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.8);
 }
-.locate-fab:active { background: #1d1016; }
-.daylight-fab { bottom: 252px; font-size: 18px; }
+.map-fab:active { background: #1d1016; }
+.map-fab.on { border-color: var(--blood-lit); color: var(--blood-lit); box-shadow: var(--glow); }
+#btn-key { font-family: "Times New Roman", Georgia, serif; font-size: 12px; letter-spacing: 0.1em; }
+
+.compass-rose {
+  display: block; width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid currentColor; position: relative;
+}
+.compass-needle {
+  position: absolute; left: 50%; top: 2px; width: 0; height: 0;
+  margin-left: -3px;
+  border-left: 3px solid transparent; border-right: 3px solid transparent;
+  border-bottom: 9px solid var(--blood-lit);
+  transform-origin: 50% 9px;
+}
+
+/* ---------- the key ----------
+   People could not tell a fresh dot from an old one, or a totem from a
+   tripwire. The colours were always carrying that information; nothing said
+   so. The two display toggles live in here too, next to the things they
+   toggle, rather than hidden in a menu. */
+
+#key-panel {
+  display: none; position: absolute; left: 12px; bottom: 96px;
+  /* Clear of the control column and the Help button — the key is something
+     you read while the game carries on, not a modal, so nothing it covers
+     should be something you might need. */
+  right: 74px;
+  max-height: 64%; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  z-index: 940; padding: 14px 16px 18px;
+  background: linear-gradient(180deg, var(--panel) 0%, #08070a 100%);
+  border: 1px solid var(--edge); border-left: 3px solid var(--blood-dim);
+  border-radius: 3px; box-shadow: 0 10px 40px rgba(0,0,0,0.9);
+}
+#key-panel.on { display: block; }
+.key-head { display: flex; align-items: center; justify-content: space-between; }
+.key-head h3 { margin: 0; }
+.icon-btn {
+  width: 34px; height: 34px; flex: 0 0 34px; margin: 0; padding: 0;
+  font-size: 15px; letter-spacing: 0; border-radius: 50%;
+  background: transparent; border: 1px solid var(--edge); color: var(--bone-dim);
+}
+#key-body h4 {
+  margin: 14px 0 6px; font-size: 11px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--bone-dim);
+}
+.key-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 5px 0; font-size: 13px; line-height: 1.35;
+}
+.key-swatch {
+  flex: 0 0 26px; height: 18px; margin-top: 1px; border-radius: 3px;
+  position: relative;
+}
+.key-swatch.dot { border-radius: 50%; width: 18px; flex-basis: 18px; margin-left: 4px; }
+.key-swatch.ring { background: none; border: 2px dashed var(--amber); border-radius: 50%; width: 18px; flex-basis: 18px; margin-left: 4px; }
+.key-swatch.outline { background: none; border: 2px solid currentColor; }
+.key-swatch.fade {
+  background: linear-gradient(90deg, #fff 0%, #ff0000 55%, rgba(255,0,0,0) 100%);
+  flex-basis: 64px; width: 64px;
+}
+.key-name { color: var(--bone); font-weight: 700; }
+.key-note { color: var(--bone-dim); }
+.key-toggle {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin: 10px 0 0; padding: 9px 10px;
+  border: 1px solid var(--edge); border-radius: 2px; background: rgba(0,0,0,0.35);
+}
+.key-toggle span { font-size: 13px; }
+.key-toggle button { width: auto; flex: 0 0 auto; margin: 0; padding: 7px 14px; font-size: 11px; }
 
 /* ---------- daylight mode ----------
    A legibility mode, not a second theme. Same palette and the same identity;
@@ -441,6 +537,131 @@ body.daylight h1 { animation: none; }
   -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 52%, #000 78%);
   mask-image: radial-gradient(circle at 50% 50%, transparent 52%, #000 78%);
 }
+
+/* Dot labels. Off by a toggle in the key; when on, only the freshest dot per
+   player is named, or a busy trail turns into a wall of text. */
+.dot-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  color: #fff; white-space: nowrap; width: auto !important; height: auto !important;
+  margin: 0 !important;
+  transform: translate(-50%, -210%);
+  text-shadow: 0 0 4px #000, 0 1px 3px #000, 0 0 10px rgba(0,0,0,0.9);
+  pointer-events: none;
+}
+.dot-label.mine { color: #4ade80; }
+.dot-label.stale { color: var(--amber); }
+body.daylight .dot-label { color: #1a0c0f; text-shadow: 0 0 4px #fff, 0 1px 2px #fff; }
+body.daylight .dot-label.mine { color: #12632f; }
+
+/* ---------- a sign, found ----------
+   Written in blood on a board, over the map, because a 4px dot was never
+   going to make anyone stop and read. Dismissed with the X and only the X. */
+
+#sign-found {
+  display: none; position: absolute; inset: 0; z-index: 990;
+  align-items: center; justify-content: center; padding: 24px;
+  background: rgba(3,1,2,0.72);
+}
+#sign-found.on { display: flex; }
+.sign-board {
+  position: relative; width: 100%; max-width: 380px;
+  padding: 30px 26px 22px;
+  background: linear-gradient(175deg, #2a1f16 0%, #17100b 100%);
+  border: 1px solid #4a3a28; border-radius: 3px;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.9), inset 0 1px 0 rgba(255,255,255,0.05);
+}
+.sign-close { position: absolute; top: 8px; right: 8px; border-color: #5b4634; color: #b9a68a; }
+.sign-hand {
+  margin: 6px 0 16px;
+  font-family: "Brush Script MT", "Snell Roundhand", "Segoe Script",
+    "Bradley Hand", "Apple Chancery", cursive, "Times New Roman", serif;
+  font-size: clamp(26px, 8vw, 38px); line-height: 1.2; text-align: center;
+  color: #b3060f;
+  text-shadow: 0 0 10px rgba(179,6,15,0.55), 0 2px 1px rgba(0,0,0,0.8);
+  word-break: break-word;
+}
+.sign-foot {
+  margin: 0; text-align: center; font-size: 11px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: #7d6b5a;
+}
+
+/* ---------- fireworks ----------
+   Five seconds, then nothing. Never intercepts a tap, and leaves no trace on
+   the map because there is nothing to leave — it is drawn here, over the
+   map, not into it. */
+
+#firework-layer {
+  position: absolute; inset: 0; pointer-events: none; z-index: 930;
+  overflow: hidden;
+}
+.firework { position: absolute; width: 0; height: 0; }
+.firework .spark {
+  position: absolute; left: 0; top: 0;
+  width: 9px; height: 9px; border-radius: 50%;
+  margin: -4.5px 0 0 -4.5px;
+  background: currentColor;
+  box-shadow: 0 0 14px currentColor, 0 0 30px currentColor;
+  animation: spark-fly var(--life, 1600ms) cubic-bezier(0.15, 0.7, 0.35, 1) forwards;
+}
+/* The flash at the moment it goes off, so it reads as one firework rather
+   than a handful of dots that happened to appear together. */
+.firework .flash {
+  position: absolute; left: 0; top: 0;
+  width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, currentColor 45%, transparent 72%);
+  animation: spark-flash 620ms ease-out forwards;
+}
+@keyframes spark-flash {
+  0%   { transform: scale(0.2); opacity: 1; }
+  45%  { transform: scale(3.4); opacity: 0.85; }
+  100% { transform: scale(5.2); opacity: 0; }
+}
+.firework .spark.willow { animation-timing-function: cubic-bezier(0.1, 0.9, 0.3, 1); }
+.firework-label {
+  position: absolute; transform: translate(-50%, -160%);
+  white-space: nowrap; font-family: "Times New Roman", Georgia, serif;
+  font-size: 14px; letter-spacing: 0.08em; color: #fff;
+  text-shadow: 0 0 8px currentColor, 0 2px 3px #000;
+  animation: firework-fade 5s ease-out forwards;
+}
+@keyframes spark-fly {
+  0%   { transform: translate(0, 0) scale(1); opacity: 1; }
+  70%  { opacity: 0.9; }
+  100% { transform: translate(var(--dx), var(--dy)) scale(0.3); opacity: 0; }
+}
+@keyframes firework-fade {
+  0% { opacity: 0; } 12% { opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .firework .spark { animation-duration: 300ms; }
+}
+
+/* ---------- hider chat ---------- */
+
+.chat-inner { display: flex; flex-direction: column; max-height: 78vh; }
+#chat-log {
+  list-style: none; margin: 8px 0; padding: 0 2px;
+  flex: 1; min-height: 90px; max-height: 44vh;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+}
+#chat-log li {
+  padding: 7px 9px; margin-bottom: 5px; font-size: 13px; line-height: 1.4;
+  background: rgba(0,0,0,0.4); border-left: 2px solid var(--edge);
+  border-radius: 2px; word-break: break-word;
+}
+#chat-log li.mine { border-left-color: var(--rot); }
+#chat-log .who {
+  display: block; font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--bone-dim); margin-bottom: 2px;
+}
+#chat-log li.empty { background: none; border: none; color: var(--bone-dim); }
+
+/* ---------- the walk-through at the end ---------- */
+
+#replay-map { height: 320px; border: 1px solid var(--edge); margin-bottom: 8px; }
+#replay-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; }
+.replay-key { display: flex; align-items: center; gap: 6px; color: var(--bone-dim); }
+.replay-key i { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
 
 /* ---------- phone closed ----------
    A deliberate dead end: nothing to look at, one way out. Sits above the

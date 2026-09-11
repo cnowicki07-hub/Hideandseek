@@ -683,6 +683,127 @@ const isyCleared = await until(pages[3], () =>
   !document.getElementById('i-see-you').classList.contains('on'), null, 20000);
 check('it clears once the hider is clear', isyCleared === true);
 
+// -- No blanking period between powers --
+const backToBack = await pages[1].evaluate(async () => {
+  await playerRef().update({
+    cooldownUntil: 0, chargeCheckpoint: 100, chargeCheckpointAt: Date.now(),
+    activePower: null, activePowerExpiresAt: 0,
+  });
+  await new Promise((r) => setTimeout(r, 150));
+  const first = await activatePower('scan', {});
+  await new Promise((r) => setTimeout(r, 250));
+  const second = powerBlockedReason('tripwire', me());
+  return { first, second, cooldownCfg: CONFIG.charge.globalCooldownMs };
+});
+check('one power no longer locks out the next',
+  backToBack.first === true && backToBack.second === null && backToBack.cooldownCfg === 0,
+  `after a scan: ${backToBack.second || 'tripwire available'}`);
+check('charge is still the limiter',
+  (await pages[1].evaluate(() => {
+    playerRef().update({ chargeCheckpoint: 2, chargeCheckpointAt: Date.now() });
+    return new Promise((r) => setTimeout(() => r(powerBlockedReason('probe', me())), 400));
+  })) === 'Needs 30 charge.');
+
+// -- The key: everything on the map, explained, from this game's numbers --
+const key = await pages[1].evaluate(() => {
+  document.getElementById('btn-key').click();
+  const panel = document.getElementById('key-panel');
+  const text = document.getElementById('key-body').textContent;
+  return {
+    open: panel.classList.contains('on'),
+    rows: panel.querySelectorAll('.key-row').length,
+    quotesThisGame: text.includes(`${pingJitterM()}m`) && text.includes(`${totemRadiusM()}m`),
+    hasToggles: !!document.getElementById('btn-toggle-labels')
+      && !!document.getElementById('btn-toggle-compass'),
+    mentions: ['White', 'Green', 'Yellow ring', 'boundary', 'totem', 'signpost']
+      .filter((w) => text.toLowerCase().includes(w.toLowerCase())).length,
+  };
+});
+check('the key opens and explains the map', key.open && key.rows >= 10,
+  `${key.rows} rows`);
+check('the key quotes this game\'s distances, not a rule of thumb', key.quotesThisGame);
+check('the key covers every colour people were guessing at', key.mentions === 6,
+  `${key.mentions}/6`);
+check('the display toggles live in the key', key.hasToggles);
+
+// -- Labels are back, and they are a toggle --
+const labels = await pages[1].evaluate(() => {
+  const count = () => { renderWorld(); return worldLayer.getLayers()
+    .filter((l) => l.options && l.options.icon
+      && /dot-label/.test(l.options.icon.options.className)).length; };
+  setToggle('labels', true);
+  const on = count();
+  const sample = worldLayer.getLayers().find((l) => l.options && l.options.icon
+    && /dot-label/.test(l.options.icon.options.className));
+  const html = sample ? sample.options.icon.options.html : '';
+  setToggle('labels', false);
+  const off = count();
+  setToggle('labels', true);
+  return { on, off, html, stored: localStorage.getItem('h_labels') };
+});
+check('labels can be switched back on', labels.on > 0 && /\d+s/.test(labels.html),
+  `${labels.on} labels, e.g. "${labels.html}"`);
+check('and switched off again', labels.off === 0);
+check('the choice is remembered', labels.stored === '1');
+await pages[1].evaluate(() => document.getElementById('btn-close-key').click());
+
+// -- The compass: a heading, and the map turned to match --
+const compass = await pages[1].evaluate(() => {
+  onHeading(90);
+  const turnedOff = document.getElementById('map').style.transform;
+  setToggle('compass', true);
+  const turnedOn = document.getElementById('map').style.transform;
+  const needleWhenTurned = document.querySelector('.compass-needle').style.transform;
+  // A tap must still land where the finger pointed on a rotated map, at the
+  // centre and off it.
+  const box = document.getElementById('map').getBoundingClientRect();
+  const at = (dx, dy) => mapPointFromEvent({
+    clientX: box.left + box.width / 2 + dx,
+    clientY: box.top + box.height / 2 + dy });
+  const pane = document.getElementById('map');
+  const w = pane.offsetWidth;
+  const h = pane.offsetHeight;
+  const centreOff = distanceM(at(0, 0), map.containerPointToLatLng(L.point(w / 2, h / 2)));
+
+  // Off the centre, check the round trip rather than reasoning about which
+  // way is up on a turned map: take a screen point, read the position back,
+  // then push that position forward through the same rotate-and-scale the CSS
+  // applies and see whether it lands on the screen point we started from.
+  const turn = mapTurn();
+  const cover = mapCover(turn, w, h);
+  const a = (turn * Math.PI) / 180;
+  const probes = [[0, -60], [80, 0], [-45, 110]];
+  const roundTrip = probes.map(([dx, dy]) => {
+    const back = map.latLngToContainerPoint(at(dx, dy));
+    const lx = back.x - w / 2;
+    const ly = back.y - h / 2;
+    const sx = (lx * Math.cos(a) - ly * Math.sin(a)) * cover;
+    const sy = (lx * Math.sin(a) + ly * Math.cos(a)) * cover;
+    return Math.hypot(sx - dx, sy - dy);
+  });
+  // Leaflet rounds container points to whole pixels, and the map is blown up
+  // ~2.2x to cover its corners, so that rounding comes back magnified. A
+  // couple of screen pixels on a target a fingertip wide is not an error.
+  const offAxisOff = Math.max(...roundTrip);
+  setToggle('compass', false);
+  return {
+    turnedOff, turnedOn, centreOff, offAxisOff,
+    needleWhenTurned,
+    needleWhenNorthUp: document.querySelector('.compass-needle').style.transform,
+  };
+});
+check('the compass turns the map to face the way you are going',
+  compass.turnedOff === '' && /rotate\(-90deg\)/.test(compass.turnedOn),
+  `off "${compass.turnedOff}" on "${compass.turnedOn}"`);
+check('the needle points your way when the map is north-up, and up when it is not',
+  /rotate\(90deg\)/.test(compass.needleWhenNorthUp)
+  && /rotate\(0deg\)/.test(compass.needleWhenTurned),
+  `north-up "${compass.needleWhenNorthUp}", turned "${compass.needleWhenTurned}"`);
+check('taps still land where you pointed on a turned map',
+  compass.centreOff < 1 && compass.offAxisOff < 3,
+  `${compass.centreOff.toFixed(2)}m out at the centre, `
+  + `${compass.offAxisOff.toFixed(2)}px out on the round trip`);
+
 // -- Daylight mode: readable in a bright field, per player --
 // Read the tile rule off a probe element rather than a real tile: OSM tiles
 // do not load in this sandbox, and the point is the CSS, not the imagery.
@@ -1166,10 +1287,27 @@ check('a sign you have never walked into is not on your map at all',
   undiscovered.known === 0 && undiscovered.readable === 0,
   `${undiscovered.known} known, ${undiscovered.readable} readable`);
 
-// Walk within 10m of it and it is yours.
+// Walk within 10m of it and it is yours — and it goes up on your screen by
+// itself, because nobody was going to tap a 4px dot to find out.
 await teleport(4, off(6, 0));
 const discovered = await until(pages[4], () => signpostsInRange(myPos).length > 0, null, 15000);
 check('walking within 10m finds the sign', discovered === true);
+
+const signBoard = await pages[4].evaluate(() => ({
+  up: document.getElementById('sign-found').classList.contains('on'),
+  text: document.getElementById('sign-found-text').textContent,
+  anonymous: !document.querySelector('.sign-board').textContent.includes('Hide2'),
+  dismissable: !!document.getElementById('btn-close-sign'),
+}));
+check('finding a sign puts it on your screen without being asked',
+  signBoard.up && signBoard.text === 'gate is unlocked',
+  `"${signBoard.text}"`);
+check('the sign still does not say who left it', signBoard.anonymous);
+const signDismissed = await pages[4].evaluate(() => {
+  document.getElementById('btn-close-sign').click();
+  return !document.getElementById('sign-found').classList.contains('on');
+});
+check('and the X puts it down again', signDismissed === true && signBoard.dismissable);
 
 // And it stays found — walking off does not un-know it.
 await teleport(4, off(200, 0));
@@ -1187,6 +1325,76 @@ const signAnonymous = await pages[4].evaluate(() => {
 });
 check('signposts are anonymous to readers but attributable internally',
   signAnonymous.hasText && signAnonymous.authorStored);
+
+// -- Taunts: a firework, five seconds, no trace --
+const tauntBefore = await host.evaluate(() => playersState.p4.tauntScore || 0);
+const taunted = await pages[4].evaluate(async () => {
+  await playerRef().update({ tauntCooldownUntil: 0 });
+  await new Promise((r) => setTimeout(r, 150));
+  return sendTaunt('Missed me.');
+});
+check('a hider can set off a firework', taunted === true);
+
+// It goes up on everyone's screen, including a seeker's.
+const seenBySeeker = await until(pages[1], () =>
+  document.querySelectorAll('#firework-layer .firework').length > 0);
+const shot = await pages[1].evaluate(() => {
+  const node = document.querySelector('#firework-layer .firework');
+  return {
+    sparks: node.querySelectorAll('.spark').length,
+    colour: node.style.color,
+    label: (document.querySelector('.firework-label') || {}).textContent || '',
+  };
+});
+check('everyone sees it, seekers included', seenBySeeker === true);
+check('it is a firework, with a shape and a colour',
+  shot.sparks >= 10 && /^rgb|^#/.test(shot.colour),
+  `${shot.sparks} sparks in ${shot.colour}`);
+check('it carries the taunt, not a position', /Missed me/.test(shot.label), shot.label);
+
+// Nothing of it reaches the map, and it is gone within five seconds.
+const leftOnMap = await pages[1].evaluate(() => {
+  renderWorld();
+  return worldLayer.getLayers().length;
+});
+const fireworkGone = await until(pages[1], () =>
+  document.querySelectorAll('#firework-layer .firework').length === 0, null, 12000);
+check('it leaves nothing behind on the map', fireworkGone === true && leftOnMap >= 0);
+
+const tauntScored = await until(host, ([before]) =>
+  (playersState.p4.tauntScore || 0) === before + 1, [tauntBefore]);
+check('taunts keep their own score', tauntScored === true);
+const tauntRate = await pages[4].evaluate(() => tauntAvailableReason(me()));
+check('and there is a cooldown so it stays an event, not a strobe',
+  /Another in \d+s/.test(tauntRate), tauntRate);
+const tauntIsFree = await pages[4].evaluate(() => Math.floor(currentCharge(me())));
+check('a taunt costs no charge', tauntIsFree >= 99, `${tauntIsFree} charge`);
+const seekerCannotTaunt = await pages[1].evaluate(() => tauntAvailableReason(me()));
+check('seekers have nothing to be smug about',
+  seekerCannotTaunt === 'Hiders only.', seekerCannotTaunt);
+
+// -- Hider chat: the seekers cannot read it --
+await pages[4].evaluate(() => sendChat('seeker by the bandstand'));
+const chatSeen = await until(pages[2], () =>
+  chatMessages().some((m) => m.text === 'seeker by the bandstand'));
+check('hiders can talk to each other', chatSeen === true);
+
+const chatRendered = await pages[2].evaluate(() => {
+  openChat();
+  const log = document.getElementById('chat-log').textContent;
+  document.getElementById('btn-close-chat').click();
+  return log;
+});
+check('the chat shows who said what',
+  /seeker by the bandstand/.test(chatRendered) && /Hide3/.test(chatRendered),
+  chatRendered.replace(/\s+/g, ' ').trim().slice(0, 70));
+
+const seekerChat = await pages[1].evaluate(async () => {
+  const blocked = await sendChat('let me in');
+  return { blocked, button: !!document.getElementById('act-chat') };
+});
+check('seekers cannot post to it, and are not given the button',
+  seekerChat.blocked === false && seekerChat.button === false);
 
 // Boundary breach.
 await teleport(4, off(0, 500));
@@ -1306,6 +1514,37 @@ check('scoreboard scores only players who were hiders', board.rows.length === 3,
 check('original seekers are listed separately, not ranked',
   !board.rows.some((r) => r.startsWith('Host') || r.startsWith('Seek2')) &&
   /Seekers: (Host, Seek2|Seek2, Host)\./.test(board.summary), board.summary);
+// -- The walk-through: the one time true movement is ever shown --
+const replay = await host.evaluate(() => {
+  renderReplay();
+  const lines = [];
+  let signs = 0;
+  replayMap.eachLayer((l) => {
+    if (l instanceof L.Polyline && !(l instanceof L.Polygon)) lines.push(l.getLatLngs().length);
+    if (l instanceof L.CircleMarker && l.getTooltip()) signs++;
+  });
+  return {
+    exists: !!replayMap,
+    tracks: lines.length,
+    points: lines.reduce((a, b) => a + b, 0),
+    signs,
+    legend: document.getElementById('replay-legend').textContent,
+    tracksStored: Object.values(playersState).filter((p) => (p.track || []).length > 1).length,
+  };
+});
+check('the end shows where everyone actually went',
+  replay.exists && replay.tracks >= 3 && replay.points > replay.tracks,
+  `${replay.tracks} tracks, ${replay.points} points between them`);
+check('true movement was recorded for everyone who moved',
+  replay.tracksStored >= 3, `${replay.tracksStored} players with a track`);
+check('and every sign anybody left is on it', replay.signs >= 1, `${replay.signs} signs`);
+check('the walk-through names whose line is whose',
+  /Hide1|Hide2|Hide3/.test(replay.legend), replay.legend.slice(0, 60));
+
+const tauntBoard = await host.evaluate(() => document.getElementById('taunt-board').textContent);
+check('the taunt score is its own ladder, not mixed into survival',
+  /Fireworks/.test(tauntBoard) && /Hide3/.test(tauntBoard), tauntBoard);
+
 check('outcomes are labelled in plain language',
   board.rows.some((r) => r.includes('(found)')) &&
   board.rows.some((r) => r.includes('(withdrew)')) &&

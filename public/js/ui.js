@@ -59,7 +59,10 @@ function toast(msg) {
 
 // Asked for from inside the tap that starts a game — see requestLocation().
 async function ensureLocation() {
+  // Both of these must happen inside the tap that got us here: iOS only
+  // grants location and the screen wake lock in response to a gesture.
   const r = await requestLocation();
+  keepScreenAwake();
   renderLocationStatus();
   if (!r.ok) {
     alert(r.reason + '\n\nThis game is played entirely on GPS, so it cannot start without it.');
@@ -124,8 +127,14 @@ function initMap() {
     maxZoom: 19, attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
   worldLayer = L.layerGroup().addTo(map);
-  map.on('click', onMapClick);
+  // Taken on the container rather than through Leaflet's own click, so a
+  // rotated map still targets where the finger actually pointed.
+  el('map').addEventListener('click', (ev) => {
+    if (!mapReady || ev.target.closest('.leaflet-control')) return;
+    onMapPoint(mapPointFromEvent(ev));
+  });
   mapReady = true;
+  applyCompass();
 }
 
 let recentered = false;
@@ -155,6 +164,141 @@ el('btn-open-phone').onclick = async () => {
   btn.disabled = true;
   try { await openPhone(); } finally { btn.disabled = false; }
 };
+
+// ---------- display toggles ----------
+//
+// Three things people asked to be able to turn on and off. All per player,
+// all remembered, none of them touching a rule — this is what your screen
+// shows you, not what is true.
+
+const TOGGLES = {
+  labels: { key: 'h_labels', on: true },     // names and ages on dots
+  compass: { key: 'h_compass', on: false },  // turn the map to face your heading
+};
+
+function toggleOn(name) { return TOGGLES[name].on; }
+
+function loadToggles() {
+  Object.values(TOGGLES).forEach((t) => {
+    try {
+      const v = localStorage.getItem(t.key);
+      if (v !== null) t.on = v === '1';
+    } catch (e) { /* private mode — defaults stand */ }
+  });
+}
+
+function setToggle(name, on) {
+  const t = TOGGLES[name];
+  t.on = !!on;
+  try { localStorage.setItem(t.key, t.on ? '1' : '0'); } catch (e) { /* ignore */ }
+  if (name === 'compass') applyCompass();
+  el('btn-compass').classList.toggle('on', TOGGLES.compass.on);
+  if (mapReady) renderWorld();
+  if (el('key-panel').classList.contains('on')) renderKey();
+}
+
+loadToggles();
+
+// ---------- the compass ----------
+//
+// Two things at once, because they answer the same question. The needle
+// always shows which way you are facing. With the toggle on, the map itself
+// turns so that "up" is the way you are going, which is how people actually
+// read a map while walking.
+//
+// Rotating a Leaflet map means its own idea of where a tap landed is wrong,
+// so taps are taken here first and unrotated by hand before the map ever
+// sees them — see mapPointFromEvent.
+
+let heading = null;          // degrees, 0 = north, null until the phone says
+
+// How far the map has been turned, and how far it had to be blown up to keep
+// its corners off the screen. Both are needed to read a tap back.
+function mapTurn() {
+  return (toggleOn('compass') && heading != null) ? -heading : 0;
+}
+
+// A rotated rectangle leaves triangles of nothing at the corners. This is the
+// smallest scale that keeps the viewport covered at a given angle.
+function mapCover(turnDeg, w, h) {
+  if (!turnDeg || !w || !h) return 1;
+  const a = Math.abs((turnDeg * Math.PI) / 180);
+  const c = Math.abs(Math.cos(a));
+  const s = Math.abs(Math.sin(a));
+  return Math.max((w * c + h * s) / w, (w * s + h * c) / h);
+}
+
+function applyCompass() {
+  const pane = document.getElementById('map');
+  if (!pane) return;
+  const turn = mapTurn();
+  const cover = mapCover(turn, pane.offsetWidth, pane.offsetHeight);
+  pane.style.transformOrigin = '50% 50%';
+  pane.style.transform = turn ? `rotate(${turn}deg) scale(${cover.toFixed(4)})` : '';
+  const needle = document.querySelector('.compass-needle');
+  // North-up: the needle shows your heading. Heading-up: the map is already
+  // turned, so north is what moves and the needle sits still at the top.
+  if (needle) needle.style.transform = `rotate(${heading == null ? 0 : heading + turn}deg)`;
+}
+
+function onHeading(deg) {
+  if (deg == null || Number.isNaN(deg)) return;
+  const next = (deg + 360) % 360;
+  // Ignore sub-degree jitter, or the map shivers in your hand.
+  if (heading != null && Math.abs(((next - heading + 540) % 360) - 180) < 2) return;
+  heading = next;
+  applyCompass();
+}
+
+// iOS needs permission for the compass, and only grants it from a tap.
+async function askForCompass() {
+  const DOE = window.DeviceOrientationEvent;
+  if (!DOE) { toast('This phone has no compass.'); return false; }
+  if (typeof DOE.requestPermission === 'function') {
+    try {
+      const r = await DOE.requestPermission();
+      if (r !== 'granted') { toast('Compass permission refused.'); return false; }
+    } catch (e) { toast('Compass unavailable.'); return false; }
+  }
+  window.addEventListener('deviceorientation', (e) => {
+    // iOS reports a true compass heading directly; everyone else gives the
+    // rotation from north as alpha, which counts the other way round.
+    if (typeof e.webkitCompassHeading === 'number') onHeading(e.webkitCompassHeading);
+    else if (typeof e.alpha === 'number') onHeading(360 - e.alpha);
+  }, true);
+  return true;
+}
+
+el('btn-compass').onclick = async () => {
+  if (toggleOn('compass')) { setToggle('compass', false); return; }
+  if (!(await askForCompass())) return;
+  setToggle('compass', true);
+};
+
+// A tap on a rotated map lands somewhere else entirely as far as Leaflet is
+// concerned, and the trap is that getBoundingClientRect on a rotated element
+// returns the box around the rotation, not the element — for a quarter turn
+// its width and height swap. The centre is the one point rotation and scaling
+// both leave alone, so everything is measured from there, undone, and handed
+// back in the element's own unrotated coordinates.
+function mapPointFromEvent(ev) {
+  const pane = el('map');
+  const box = pane.getBoundingClientRect();
+  const w = pane.offsetWidth;          // layout size — a transform never moves this
+  const h = pane.offsetHeight;
+  const turn = mapTurn();
+  const cover = mapCover(turn, w, h);
+
+  let x = (ev.clientX - (box.left + box.width / 2)) / cover;
+  let y = (ev.clientY - (box.top + box.height / 2)) / cover;
+  if (turn) {
+    const a = (turn * Math.PI) / 180;   // turn it back by the same angle
+    const rx = x * Math.cos(a) + y * Math.sin(a);
+    const ry = -x * Math.sin(a) + y * Math.cos(a);
+    x = rx; y = ry;
+  }
+  return map.containerPointToLatLng(L.point(x + w / 2, y + h / 2));
+}
 
 // ---------- daylight ----------
 //
@@ -549,6 +693,7 @@ function renderGameStatus(g) {
   if (g.status === 'ended') {
     showView('view-end');
     renderScoreboard();
+    safely('replay', renderReplay);
     renderEndActions();
   }
 }
@@ -763,6 +908,8 @@ function buildActionButtons() {
   }
   if (p.role === 'hider') {
     add('act-snitch', 'Snitch', beginSnitch);
+    add('act-taunt', 'Taunt', openTauntModal);
+    add('act-chat', 'Hiders', openChat);
   }
   add('act-sign', 'Signs', openSignpostModal);
   add('act-menu', 'Menu', openMenu);
@@ -792,6 +939,12 @@ function refreshActionButtons(p, now) {
     const n = signpostsInRange(myPos, now).length;
     sign.textContent = n ? `Signs (${n})` : 'Signs';
   }
+  const taunt = el('act-taunt');
+  if (taunt) {
+    const reason = tauntAvailableReason(p, now);
+    taunt.disabled = !!reason;
+    taunt.title = reason || 'Set off a firework. Costs nothing, tells them nothing.';
+  }
 }
 
 // ---------- targeting ----------
@@ -812,8 +965,8 @@ function cancelMapTargeting() {
   p.classList.remove('active');
 }
 
-function onMapClick(e) {
-  const point = { lat: e.latlng.lat, lng: e.latlng.lng };
+function onMapPoint(latlng) {
+  const point = { lat: latlng.lat, lng: latlng.lng };
   if (mapTargetCb) {
     const cb = mapTargetCb;
     cancelMapTargeting();
@@ -1053,6 +1206,8 @@ function onGameEvent(e) {
     case 'went_away': toast(`${e.name} has dropped out — no contact.`); break;
     case 'reinstated': toast('The host has put you back in the game.'); break;
     case 'player_reinstated': toast(`${e.name} is back in the game.`); break;
+    // Everyone sees a taunt, including the person who set it off.
+    case 'taunt': fireFirework(e); break;
     case 'panic':
       showPanicAlert(e);
       break;
@@ -1078,6 +1233,255 @@ function showPanicAlert(e) {
   alert(`PANIC — ${e.name}\n${e.message || 'No message.'}\n\nTheir exact position is now on your map.`);
   renderWorld();
 }
+
+// ---------- the key ----------
+//
+// Every colour on the map was already carrying information and nothing said
+// so. This says so. It is built from the same MAP palette and the same CONFIG
+// the map draws from, so it cannot drift out of date, and it reads the
+// distances for THIS game rather than quoting a 600m map at people.
+
+function keyRow(swatchClass, style, name, note) {
+  return `<div class="key-row"><span class="key-swatch ${swatchClass}" style="${style}"></span>`
+    + `<span><span class="key-name">${name}</span> <span class="key-note">${note}</span></span></div>`;
+}
+
+function renderKey() {
+  const p = me();
+  const seeker = p && p.role === 'seeker';
+  const them = seeker ? 'a hider' : 'a seeker';
+  const rows = [];
+
+  rows.push('<h4>Dots — somebody\'s position, when it was taken</h4>');
+  rows.push(keyRow('fade', '', 'White → red → gone',
+    `How old the reading is. White is seconds old and worth running at; red is `
+    + `five minutes; it fades to nothing at ten.`));
+  rows.push(keyRow('dot', `background:${MAP.own}`, 'Green',
+    'Yours. What you have given away so far.'));
+  rows.push(keyRow('ring', '', 'Yellow ring',
+    'That phone was closed when the reading was taken — it is where they '
+    + 'were, not where they are.'));
+  rows.push(keyRow('dot', 'background:#fff;border:2px solid #16060a', 'Thick edge',
+    'Exact. A tripwire, a totem or a panic alert — no fuzz on it at all.'));
+  rows.push(`<div class="key-row"><span class="key-swatch" style="background:none"></span>`
+    + `<span class="key-note">Everything else is wrong by up to `
+    + `<strong>${pingJitterM()}m</strong>, rolled fresh each time — which is why a `
+    + `still player can look like a moving one.</span></div>`);
+
+  rows.push('<h4>On the ground</h4>');
+  rows.push(keyRow('outline', `color:${MAP.boundary}`, 'Dashed red outline',
+    'The boundary. Step outside and a countdown starts.'));
+  rows.push(keyRow('', `background:${MAP.totemLit}`, 'Green circle',
+    `A totem, ${totemRadiusM()}m across. Seekers see anyone inside it. Two hiders `
+    + 'standing at the middle can destroy it.'));
+  rows.push(keyRow('outline', `color:${MAP.gloom}`, 'Faint dashed circle',
+    seeker ? `Your tripwire, ${tripwireRadiusM()}m across. Only you can see it.`
+      : 'Not shown to you — tripwires are hidden until you walk into one.'));
+  rows.push(keyRow('dot', `background:${MAP.woodLit}`, 'Small brown dot',
+    'A signpost you have found. Walk within '
+    + `${CONFIG.signposts.discoverRadiusM}m of one and it appears on your map for good.`));
+  rows.push(keyRow('dot', `background:${MAP.coldDim};border:2px solid ${MAP.cold}`, 'Blue marker',
+    'You.'));
+
+  rows.push('<h4>Only while a power is running</h4>');
+  rows.push(keyRow('', `background:${MAP.cold};opacity:0.4`, 'Blue wedge',
+    'Where your last Probe swept.'));
+  rows.push(keyRow('', 'background:linear-gradient(90deg,#ff4d4d,#4dd2ff,#a94dff)',
+    'Glow at the screen edge',
+    `A Scan. One colour per ${seeker ? 'hider' : 'player'}, showing roughly which `
+    + 'way they are — never how far.'));
+  rows.push(keyRow('dot', `background:${MAP.violet}`, 'Violet dot',
+    'A hider the Snitch surveyed for you.'));
+
+  el('key-body').innerHTML = rows.join('')
+    + `<div class="key-toggle"><span>Names and ages on dots</span>`
+    + `<button class="secondary" id="btn-toggle-labels">${toggleOn('labels') ? 'On' : 'Off'}</button></div>`
+    + `<div class="key-toggle"><span>Turn the map to face the way I am going</span>`
+    + `<button class="secondary" id="btn-toggle-compass">${toggleOn('compass') ? 'On' : 'Off'}</button></div>`;
+
+  el('btn-toggle-labels').onclick = () => setToggle('labels', !toggleOn('labels'));
+  el('btn-toggle-compass').onclick = async () => {
+    if (toggleOn('compass')) { setToggle('compass', false); return; }
+    if (await askForCompass()) setToggle('compass', true);
+  };
+}
+
+function setKeyOpen(on) {
+  el('key-panel').classList.toggle('on', on);
+  el('btn-key').classList.toggle('on', on);
+  if (on) renderKey();
+}
+
+el('btn-key').onclick = () => setKeyOpen(!el('key-panel').classList.contains('on'));
+el('btn-close-key').onclick = () => setKeyOpen(false);
+
+// ---------- a sign, found ----------
+
+let signQueue = [];
+function showFoundSign(text) {
+  signQueue.push(text);
+  if (el('sign-found').classList.contains('on')) return;
+  nextFoundSign();
+}
+
+function nextFoundSign() {
+  const text = signQueue.shift();
+  if (text == null) { el('sign-found').classList.remove('on'); return; }
+  el('sign-found-text').textContent = text;
+  el('sign-found').classList.add('on');
+}
+
+el('btn-close-sign').onclick = nextFoundSign;
+
+// ---------- fireworks ----------
+//
+// Drawn over the map rather than into it, which is how it leaves no trace:
+// there is nothing on the map to remove, only DOM that deletes itself. If
+// the firework is off screen the message still shows, pinned to the edge
+// nearest it, so a taunt from the far side of the park still lands.
+
+const FIREWORK_PATTERNS = {
+  burst:  { sparks: 26, spread: 110, life: 1500, jitter: 0.45 },
+  ring:   { sparks: 22, spread: 90,  life: 1700, jitter: 0.05 },
+  willow: { sparks: 18, spread: 120, life: 2300, jitter: 0.35, droop: 70 },
+  comet:  { sparks: 14, spread: 150, life: 1300, jitter: 0.8, arc: 55 },
+  spiral: { sparks: 24, spread: 100, life: 1900, jitter: 0.2, twist: 300 },
+};
+
+function fireFirework(e) {
+  const layer = el('firework-layer');
+  if (!layer || !mapReady) return;
+  const pat = FIREWORK_PATTERNS[e.shape] || FIREWORK_PATTERNS.burst;
+  const box = el('map').getBoundingClientRect();
+  const pt = map.latLngToContainerPoint([e.lat, e.lng]);
+  const onScreen = pt.x >= 0 && pt.y >= 0 && pt.x <= box.width && pt.y <= box.height;
+  const x = Math.max(28, Math.min(box.width - 28, pt.x));
+  const y = Math.max(40, Math.min(box.height - 40, pt.y));
+
+  const node = document.createElement('div');
+  node.className = 'firework';
+  node.style.left = `${x}px`;
+  node.style.top = `${y}px`;
+  node.style.color = e.colour || '#ff4d4d';
+
+  const flash = document.createElement('i');
+  flash.className = 'flash';
+  node.appendChild(flash);
+
+  for (let i = 0; i < pat.sparks; i++) {
+    const spark = document.createElement('i');
+    spark.className = 'spark' + (e.shape === 'willow' ? ' willow' : '');
+    const base = (360 / pat.sparks) * i + (pat.twist ? (i / pat.sparks) * pat.twist : 0);
+    const ang = ((base + (e.shape === 'comet' ? pat.arc : 0)) * Math.PI) / 180;
+    const reach = pat.spread * (1 - pat.jitter * Math.random());
+    spark.style.setProperty('--dx', `${Math.cos(ang) * reach}px`);
+    spark.style.setProperty('--dy', `${Math.sin(ang) * reach + (pat.droop || 0)}px`);
+    spark.style.setProperty('--life', `${pat.life}ms`);
+    spark.style.animationDelay = `${Math.random() * 120}ms`;
+    node.appendChild(spark);
+  }
+
+  const label = document.createElement('div');
+  label.className = 'firework-label';
+  label.style.left = `${x}px`;
+  label.style.top = `${y}px`;
+  label.textContent = (e.message ? `${e.name}: ${e.message}` : `${e.name}!`)
+    + (onScreen ? '' : ' ↑');
+  layer.appendChild(node);
+  layer.appendChild(label);
+
+  // Five seconds, then gone, and nothing written down anywhere.
+  setTimeout(() => { node.remove(); label.remove(); }, CONFIG.taunt.durationMs);
+}
+
+// ---------- taunts ----------
+
+const TAUNT_LINES = [
+  'Over here!', 'Still here.', 'Getting warmer?', 'Missed me.',
+  'Nice try.', 'Too slow.', 'Behind you.', "You'll never.",
+];
+
+function openTauntModal() {
+  const reason = tauntAvailableReason(me());
+  if (reason) { toast(reason); return; }
+  const list = el('taunt-list');
+  list.innerHTML = '';
+  TAUNT_LINES.forEach((line) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.textContent = line;
+    b.onclick = async () => { el('taunt-modal').style.display = 'none'; await sendTaunt(line); };
+    li.appendChild(b);
+    list.appendChild(li);
+  });
+  el('input-taunt').value = '';
+  el('taunt-modal').style.display = 'flex';
+}
+
+el('btn-cancel-taunt').onclick = () => { el('taunt-modal').style.display = 'none'; };
+el('btn-send-taunt').onclick = async () => {
+  const msg = el('input-taunt').value.trim();
+  el('taunt-modal').style.display = 'none';
+  await sendTaunt(msg);
+};
+
+// ---------- hider chat ----------
+
+let chatUnread = 0;
+let chatSeenAt = Date.now();
+
+function renderChat() {
+  const p = me();
+  const log = el('chat-log');
+  const open = el('chat-modal').style.display === 'flex';
+  if (!p || p.role !== 'hider') { chatUnread = 0; refreshChatButton(); return; }
+
+  const msgs = chatMessages();
+  chatUnread = msgs.filter((m) => m.at > chatSeenAt && m.from !== playerId).length;
+  refreshChatButton();
+  if (!open) return;
+
+  log.innerHTML = '';
+  if (!msgs.length) {
+    log.innerHTML = '<li class="empty">Nothing yet. The seekers cannot read this.</li>';
+  }
+  msgs.forEach((m) => {
+    const li = document.createElement('li');
+    if (m.from === playerId) li.className = 'mine';
+    const who = document.createElement('span');
+    who.className = 'who';
+    const mins = Math.round((Date.now() - m.at) / 60000);
+    who.textContent = `${m.from === playerId ? 'You' : m.name} · ${mins < 1 ? 'just now' : mins + 'm ago'}`;
+    li.appendChild(who);
+    li.appendChild(document.createTextNode(m.text));
+    log.appendChild(li);
+  });
+  log.scrollTop = log.scrollHeight;
+  chatSeenAt = Date.now();
+  chatUnread = 0;
+  refreshChatButton();
+}
+
+function refreshChatButton() {
+  const b = el('act-chat');
+  if (b) b.textContent = chatUnread ? `Hiders (${chatUnread})` : 'Hiders';
+}
+
+function openChat() {
+  el('chat-modal').style.display = 'flex';
+  renderChat();
+}
+
+el('btn-close-chat').onclick = () => { el('chat-modal').style.display = 'none'; };
+el('btn-send-chat').onclick = async () => {
+  const box = el('input-chat');
+  const text = box.value;
+  box.value = '';
+  if (await sendChat(text)) renderChat();
+};
+el('input-chat').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') el('btn-send-chat').click();
+});
 
 // ---------- world rendering ----------
 
@@ -1255,9 +1659,10 @@ function renderTrails(p, now, add) {
       }));
     }
 
-    // No label of any kind. Colour already says how old a reading is and
-    // green already says it is yours; a name over a dot would hand out
-    // identity the ping itself never carried.
+    // Labels are a display choice now, not a rule. Off, the colour carries
+    // everything; on, the freshest dot per player says who and how long ago,
+    // which is what people kept asking the map for.
+    const newest = dots[dots.length - 1];
     dots.forEach((dot) => {
       const look = pingAppearance(dot, now);
       if (!look) return;
@@ -1283,6 +1688,18 @@ function renderTrails(p, now, add) {
         opacity: look.opacity,
         weight: daylight() ? 2 : (dot.exact ? 2 : 1),
       }));
+      if (toggleOn('labels') && dot === newest) {
+        add(L.marker([dot.lat, dot.lng], {
+          icon: L.divIcon({
+            className: 'dot-label' + (isSelf ? ' mine' : '') + (dot.stale ? ' stale' : ''),
+            html: `${isSelf ? 'You' : other.name} · ${Math.round((now - dot.at) / 1000)}s`
+              + (dot.stale ? ' · stale' : (dot.exact ? ' · exact' : '')),
+            iconSize: null,
+          }),
+          interactive: false,
+          keyboard: false,
+        }));
+      }
     });
   });
 }
@@ -1376,6 +1793,15 @@ function howToPlayHtml(role) {
        cannot chain them. You have your whole side's set — there is nothing to
        choose in advance. Tap and hold a power to read what it does.</p>
 
+    <h4>Reading the map</h4>
+    <p>Tap <strong>KEY</strong> on the right of the map for what every colour
+       means — it is built from this game's own numbers, so it tells you the
+       real distances rather than a rule of thumb. The same panel turns
+       <strong>names and ages on dots</strong> on and off, and turns the map so
+       that <strong>up is the way you are facing</strong> if you would rather
+       read it that way. The <strong>☀</strong> button lifts the whole screen
+       for bright sunlight.</p>
+
     <h4>Closing your phone</h4>
     <p>A ninety-minute game outlives some batteries. <strong>Menu → Close my
        phone</strong> stops you reporting entirely. A phone that locks itself in
@@ -1411,6 +1837,10 @@ function howToPlayHtml(role) {
       <p><strong>Tripwires</strong> cost almost nothing and are the only exact
          reading in the game — but you have to guess where somebody will walk.
          Line the gates and paths.</p>
+      <p>Hiders can talk to each other and set off fireworks at you. You cannot
+         read the one and you learn nothing from the other — a firework is five
+         seconds of somebody being pleased with themselves, and it leaves
+         nothing on the map. Do not go running at one.</p>
       <p>You also carry <strong>I SEE YOU</strong>, which costs nothing and is
          always on. Any hider who comes within 20m of you gets it across their
          whole screen, and from that moment <em>they are not allowed to run</em>
@@ -1441,6 +1871,13 @@ function howToPlayHtml(role) {
          for three minutes, anything that pings you pings a fake you instead,
          walking away on a bearing you choose. The seeker gets a real dot, in the
          wrong place, moving.</p>
+      <p>You have two things no seeker has. <strong>Hiders</strong> is a chat
+         only the hiding side can read — use it to coordinate, or to warn
+         somebody a seeker just walked past you. <strong>Taunt</strong> sets off
+         a firework where you stand: everybody sees it, for five seconds, and
+         then it is gone leaving nothing behind. It costs no charge and gives
+         away nothing anyone can use, and it is scored on its own ladder at the
+         end. It is there purely so you can be insufferable about surviving.</p>
       <p>Get within 20m of a seeker and <strong>I SEE YOU</strong> fills your
          screen. Everything still works — you can read the map, spend powers,
          do anything you could do a second ago. What changes is you:
@@ -1539,6 +1976,78 @@ el('btn-declare-hidden').onclick = () => declareHidden();
 
 el('btn-back-start').onclick = backToStart;
 
+// ---------- the walk-through ----------
+//
+// The one time the game shows true positions. For ninety minutes nobody saw
+// anything they had not paid for; at the end everybody gets to see where
+// everyone actually went, which is where the stories come from — who walked
+// straight past whom, who sat in the same bush the whole time.
+
+let replayMap = null;
+
+function renderReplay() {
+  const holder = el('replay-map');
+  if (!holder || typeof L === 'undefined') return;
+  const tracks = Object.entries(playersState)
+    .map(([id, p]) => ({ id, p, track: (p.track || []) }))
+    .filter((t) => t.track.length > 1);
+
+  if (!tracks.length) {
+    holder.style.display = 'none';
+    el('replay-legend').innerHTML =
+      '<span class="replay-key">Nobody moved far enough to draw.</span>';
+    return;
+  }
+  holder.style.display = 'block';
+
+  if (!replayMap) {
+    replayMap = L.map('replay-map', { zoomControl: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(replayMap);
+  }
+  replayMap.eachLayer((l) => { if (l instanceof L.Polyline || l instanceof L.CircleMarker) replayMap.removeLayer(l); });
+
+  const bounds = [];
+  if (gameState && gameState.boundary && gameState.boundary.length >= 3) {
+    L.polygon(gameState.boundary.map((q) => [q.lat, q.lng]), {
+      color: MAP.boundary, weight: 2, fill: false, dashArray: '6 6',
+    }).addTo(replayMap);
+    gameState.boundary.forEach((q) => bounds.push([q.lat, q.lng]));
+  }
+
+  const legend = [];
+  tracks.forEach(({ id, p, track }) => {
+    const colour = playerColour(id);
+    const line = track.map((pt) => [pt.lat, pt.lng]);
+    line.forEach((pt) => bounds.push(pt));
+    L.polyline(line, { color: colour, weight: 3, opacity: 0.85 }).addTo(replayMap);
+    // Hollow at the start, solid where they finished.
+    L.circleMarker(line[0], { radius: 5, color: colour, fill: false, weight: 2 }).addTo(replayMap);
+    L.circleMarker(line[line.length - 1], {
+      radius: 6, color: colour, fillColor: colour, fillOpacity: 1,
+    }).addTo(replayMap);
+    legend.push(`<span class="replay-key"><i style="background:${colour}"></i>`
+      + `${p.name} · ${p.role || '—'}</span>`);
+  });
+
+  // Every sign anyone left, whether or not you ever found it.
+  Object.values(signpostsState).forEach((sp) => {
+    bounds.push([sp.lat, sp.lng]);
+    L.circleMarker([sp.lat, sp.lng], {
+      radius: 5, color: MAP.wood, fillColor: MAP.woodLit, fillOpacity: 1,
+    }).addTo(replayMap).bindTooltip(sp.text || 'A sign', { direction: 'top' });
+  });
+  if (Object.keys(signpostsState).length) {
+    legend.push(`<span class="replay-key"><i style="background:${MAP.woodLit}"></i>`
+      + `signposts — tap to read</span>`);
+  }
+
+  el('replay-legend').innerHTML = legend.join('');
+  if (bounds.length) replayMap.fitBounds(bounds, { padding: [20, 20] });
+  setTimeout(() => replayMap.invalidateSize(), 120);
+}
+
 function renderScoreboard() {
   const list = el('scoreboard');
   list.innerHTML = '';
@@ -1556,6 +2065,18 @@ function renderScoreboard() {
       survived: p.status === 'active' && p.role === 'hider',
     }))
     .sort((a, b) => b.ms - a.ms);
+
+  // Bravado, ranked on its own ladder so it never competes with surviving.
+  const taunts = Object.values(playersState)
+    .filter((x) => (x.tauntScore || 0) > 0)
+    .sort((a, b) => b.tauntScore - a.tauntScore);
+  const tauntLine = el('taunt-board');
+  if (tauntLine) {
+    tauntLine.innerHTML = taunts.length
+      ? '<strong>Fireworks:</strong> ' + taunts
+        .map((x) => `${x.name} ×${x.tauntScore}`).join(' · ')
+      : 'Nobody set anything off. Disappointing.';
+  }
 
   scored.forEach((r) => {
     const li = document.createElement('li');

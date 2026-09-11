@@ -78,7 +78,11 @@ const CONFIG = {
     // regen rate means a seeker can sweep roughly every two minutes.
     // Halve the regen and the game slows down everywhere at once.
     regenPerMs: 1 / 4000, // 1 point every 4 seconds — 15/min
-    globalCooldownMs: 60000,
+    // No blanking period between powers. Charge is the whole limiter: a
+    // minute's enforced silence on top of it only made people miss the moment
+    // they were saving for, and the regen rate already decides how often
+    // anyone can act.
+    globalCooldownMs: 0,
     conversionStartingCharge: 30,
     conversionGraceMs: 60000,
   },
@@ -238,6 +242,31 @@ const CONFIG = {
     // gives the hiders a moment to get out of sight.
     maxFractionOfGame: 0.2,
     minMs: 2 * 60000,
+  },
+
+  // What gets kept for the walk-through at the end. Positions are already
+  // throttled on the wire; this is a second, coarser sample kept per player
+  // so the end-of-game map can draw where everybody actually went — the only
+  // time in the game true movement is ever shown.
+  replay: {
+    minIntervalMs: 15000,
+    maxPoints: 400,   // 400 x 15s is over 90 minutes of walking
+  },
+
+  // Bravado. Costs no charge, because charge buys information and this buys
+  // nothing — it is a firework, it lasts five seconds, and it leaves nothing
+  // behind. The cooldown is the only limiter, and it exists so a taunt stays
+  // an event rather than a strobe.
+  taunt: {
+    cooldownMs: 30000,
+    durationMs: 5000,
+  },
+
+  // Hiders can talk to each other. Seekers cannot see it — client-enforced,
+  // like every other rule in this build.
+  chat: {
+    maxLength: 160,
+    maxMessages: 120,
   },
 
   // Phones get closed — deliberately, to save battery, or because they lock
