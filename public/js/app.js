@@ -146,6 +146,10 @@ async function joinGame(code, name, isHost) {
       outOfBoundsReadings: 0,
       breachStartedAt: 0,
       declaredHiddenAt: null,
+      closedAt: 0,
+      pingDebt: 0,
+      nextDebtPingAt: 0,
+      awayTotalMs: 0,
       survivalMs: null,
       endedAt: null,
       lastContactAt: Date.now(),
@@ -334,8 +338,12 @@ async function emitPing(targetId, position, opts) {
   }
 
   const shown = opts.exact ? { lat: point.lat, lng: point.lng } : jitterPoint(point);
+  // A dot made while its owner's phone was closed is not where they are, it
+  // is where they were when the phone went dark. Recorded on the dot so it
+  // can be rung in yellow, and so it stays honest for the rest of its life.
+  const stale = playerUnavailable(target, now);
   const pings = (target.pings || [])
-    .concat([{ lat: shown.lat, lng: shown.lng, at: now, exact: !!opts.exact }])
+    .concat([{ lat: shown.lat, lng: shown.lng, at: now, exact: !!opts.exact, stale }])
     .slice(-CONFIG.ping.maxStored);
 
   await playerRef(targetId).update({ pings });
@@ -424,11 +432,16 @@ async function confirmCapture(targetId) {
   return { ok: true, name: target ? target.name : 'player' };
 }
 
+// Time spent with the phone closed does not count as surviving — you were
+// not in the game, and without this a reinstated player would be credited
+// for the fifteen minutes they spent greyed out.
 function survivalMsFor(p, now) {
   if (!gameStartAt) return 0;
   const releasedAt = gameStartAt;
   const capped = gameLengthMs ? Math.min(now, releasedAt + gameLengthMs) : now;
-  return Math.max(0, capped - releasedAt);
+  const away = (p && p.awayTotalMs) || 0;
+  const closedSoFar = p && p.closedAt ? Math.max(0, now - p.closedAt) : 0;
+  return Math.max(0, capped - releasedAt - away - closedSoFar);
 }
 
 // ---------- Elimination / withdrawal ----------
@@ -578,6 +591,166 @@ async function sendPanic(message) {
     message: (message || '').trim() || null, createdAt: now,
   });
   await endPlayer(playerId, 'panicked');
+}
+
+// ---------- Open and closed ----------
+//
+// A phone can stop reporting two ways: its owner closes it deliberately, or
+// it locks itself in a pocket and the heartbeat simply stops. Both are the
+// same thing to everyone else — the position they hold on you has gone stale
+// — so both are treated the same way, and both are paid for on return.
+
+function playerUnavailable(p, now) {
+  if (!p || p.status === 'away') return true;
+  if (p.closedAt) return true;
+  const silent = (now || Date.now()) - (p.lastContactAt || p.joinedAt || 0);
+  return silent >= CONFIG.offline.staleAfterMs;
+}
+
+function unavailableForMs(p, now) {
+  now = now || Date.now();
+  if (!p) return 0;
+  if (p.closedAt) return now - p.closedAt;
+  return now - (p.lastContactAt || p.joinedAt || now);
+}
+
+// Turn a gap in reporting into owed position reports — one per full minute,
+// however the gap happened.
+function debtForGap(gapMs) {
+  return Math.max(0, Math.floor(gapMs / CONFIG.offline.debtPerMs));
+}
+
+// Away time only ever comes off a survival score, so the one invariant that
+// matters is that it can never exceed the game so far — otherwise a phone
+// that was last heard from before kick-off would wipe out a whole round.
+// Capping the running total rather than each addition keeps that true however
+// many times someone goes dark.
+function cappedAwayTotal(p, extraMs, now) {
+  const elapsed = gameStartAt ? Math.max(0, (now || Date.now()) - gameStartAt) : 0;
+  return Math.min(elapsed, ((p && p.awayTotalMs) || 0) + Math.max(0, extraMs));
+}
+
+let phoneClosed = false;
+
+// Deliberate: stop reporting, stop running the rules, and say so.
+async function closePhone() {
+  if (phoneClosed) return;
+  phoneClosed = true;
+  const now = Date.now();
+  await playerRef().update({ closedAt: now });
+  if (watchId && watchId !== -1 && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
+  watchId = null;
+  stopTravel();
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  renderClosedState();
+}
+
+// Back again. The bill for the time away lands here.
+async function openPhone() {
+  if (!phoneClosed) return;
+  phoneClosed = false;
+  const now = Date.now();
+  const p = me() || {};
+  const gap = p.closedAt ? now - p.closedAt : 0;
+  await applyAwayGap(gap, now);
+  lastSeenAlive = now;
+  startTracking();
+  startTick();
+  renderClosedState();
+  return gap;
+}
+
+// Shared by the deliberate reopen and by a tab that was simply backgrounded
+// long enough for its timers to stop: bank the away time, owe the reports.
+async function applyAwayGap(gapMs, now) {
+  now = now || Date.now();
+  const p = me() || {};
+  const owed = debtForGap(gapMs);
+  const debt = Math.min(CONFIG.offline.maxDebt, (p.pingDebt || 0) + owed);
+  // If the host already greyed them out, markAway banked this stretch — do
+  // not charge them for the same silence twice.
+  const banked = p.status === 'away' ? 0 : gapMs;
+  await playerRef().update({
+    closedAt: 0,
+    awayTotalMs: cappedAwayTotal(p, banked, now),
+    pingDebt: debt,
+    // First repayment immediately, then one every thirty seconds.
+    nextDebtPingAt: debt ? now : 0,
+    lastContactAt: now,
+  });
+  if (owed) {
+    toast(owed === 1
+      ? 'Back. You owe one position report.'
+      : `Back. You owe ${owed} position reports, one every 30 seconds.`);
+  }
+  return owed;
+}
+
+// Pays the debt down, one ordinary ping at a time. Ordinary on purpose: these
+// carry the usual error, and Go quiet and Decoy can both answer them — going
+// dark is a cost, not a sentence.
+function tickPingDebt(p, now) {
+  if (!myPos || !(p.pingDebt > 0)) return;
+  if (now < (p.nextDebtPingAt || 0)) return;
+  playerRef().update({
+    pingDebt: p.pingDebt - 1,
+    nextDebtPingAt: now + CONFIG.offline.debtPingIntervalMs,
+  }).catch(() => {});
+  emitPing(playerId, myPos, { notify: false });
+  toast(p.pingDebt > 1
+    ? `Position reported. ${p.pingDebt - 1} still owed.`
+    : 'Position reported. Debt cleared.');
+}
+
+// A backgrounded tab's timers stop, so the tick itself is the detector: if it
+// has not run for far longer than it should have, this phone was closed.
+let lastSeenAlive = Date.now();
+function noticeMissedTime(now) {
+  const gap = now - lastSeenAlive;
+  lastSeenAlive = now;
+  if (gap < CONFIG.offline.staleAfterMs) return;
+  applyAwayGap(gap, now).catch(() => {});
+}
+
+// ---------- Host: away and reinstatement ----------
+
+// Not an elimination: a greyed-out player keeps their role, their charge and
+// their place, and the host can put them back.
+async function markAway(id, now) {
+  const p = playersState[id];
+  if (!p || p.status !== 'active') return;
+  // Bank the dark stretch before freezing the clock, or the fifteen minutes
+  // of silence that got them here would be scored as fifteen minutes of
+  // successful hiding.
+  const awayTotalMs = cappedAwayTotal(p, unavailableForMs(p, now), now);
+  await playerRef(id).update({
+    status: 'away',
+    awayAt: now,
+    awayTotalMs,
+    survivalMs: survivalMsFor({ ...p, awayTotalMs, closedAt: 0 }, now),
+    activePower: null, activePowerExpiresAt: 0, decoy: null,
+  });
+  await clearHuntsOn(id);
+  await pushEvent({ type: 'went_away', name: p.name, exclude: id });
+}
+
+async function reinstatePlayer(id) {
+  const p = playersState[id];
+  if (!p || p.status !== 'away') return false;
+  const now = Date.now();
+  await playerRef(id).update({
+    status: 'active',
+    awayAt: null,
+    // The greyed-out stretch is banked as away time so it is not scored as
+    // survival, and their clock starts again from here.
+    awayTotalMs: cappedAwayTotal(p, now - (p.awayAt || now), now),
+    survivalMs: null,
+    closedAt: 0,
+    lastContactAt: now,
+  });
+  await pushEvent({ type: 'reinstated', to: id });
+  await pushEvent({ type: 'player_reinstated', name: p.name, exclude: id });
+  return true;
 }
 
 function rememberName(name) {
@@ -772,6 +945,7 @@ function tick() {
   const p = me();
   if (!p) return;
   const now = Date.now();
+  noticeMissedTime(now);
 
   // Contact heartbeat, for when GPS is unavailable and no position write is
   // happening. A position write already refreshes lastContactAt.
@@ -793,6 +967,7 @@ function tick() {
   }
   // Both roles can leave and read signs, so both roles discover them.
   if (myPos) tickSignpostDiscovery();
+  tickPingDebt(p, now);
   tickHunt(p, now);
   if (p.isHost) tickHostChecks(now);
 
@@ -873,10 +1048,11 @@ function tickHostChecks(now) {
 
   // Offline flag / auto-elimination, and the end condition. Run by the host's
   // client only, so these fire once rather than once per player.
+  // Long enough unavailable and they are greyed out — not eliminated. The
+  // host can put them back, which is why this is a status and not an ending.
   Object.entries(playersState).forEach(([id, p]) => {
     if (p.status !== 'active') return;
-    const silentMs = now - (p.lastContactAt || p.joinedAt || now);
-    if (silentMs >= CONFIG.offline.eliminateAfterMs) endPlayer(id, 'offline_eliminated');
+    if (unavailableForMs(p, now) >= CONFIG.offline.awayAfterMs) markAway(id, now);
   });
 
   const hidersLeft = Object.values(playersState)
@@ -896,6 +1072,5 @@ function anyHiderEverAssigned() {
 }
 
 function offlineFlagged(p, now) {
-  const silentMs = (now || Date.now()) - (p.lastContactAt || p.joinedAt || 0);
-  return silentMs >= CONFIG.offline.flagAfterMs;
+  return playerUnavailable(p, now);
 }

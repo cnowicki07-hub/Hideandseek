@@ -442,6 +442,37 @@ body.daylight h1 { animation: none; }
   mask-image: radial-gradient(circle at 50% 50%, transparent 52%, #000 78%);
 }
 
+/* ---------- phone closed ----------
+   A deliberate dead end: nothing to look at, one way out. Sits above the
+   modals because while it is up nothing else on the screen is live —
+   except the Help button, which is above everything. */
+
+#closed-screen {
+  display: none; position: fixed; inset: 0; z-index: 1100;
+  background: #040406;
+  align-items: center; justify-content: center; padding: 24px;
+}
+#closed-screen.on { display: flex; }
+.closed-inner { max-width: 380px; text-align: center; }
+.closed-inner h3 {
+  font-size: 26px; color: var(--bone-dim); text-shadow: none;
+  letter-spacing: 0.22em;
+}
+.closed-inner p { color: var(--bone-dim); font-size: 14px; line-height: 1.5; }
+.closed-inner .warn { color: var(--amber); }
+#btn-open-phone { margin-top: 18px; }
+
+/* A player nobody can get a fresh reading on. */
+.stale-tag {
+  color: var(--amber); font-size: 11px; letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+#lobby-players li.is-away, #lobby-players li.row-pick.is-away .role-pick {
+  opacity: 0.45;
+}
+.away-row { display: flex; gap: 5px; align-items: stretch; }
+.reinstate-btn { flex: 0 0 auto; }
+
 /* ---------- I SEE YOU ----------
    A passive seeker presence, drawn over everything and doing nothing.
    pointer-events: none throughout — the hider can still work the whole

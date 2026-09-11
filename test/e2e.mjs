@@ -431,6 +431,99 @@ const mapLabels = await pages[1].evaluate(() => {
 check('nothing on the map carries a label', mapLabels.length === 0,
   mapLabels.length ? mapLabels.join(' | ') : 'no labels on any layer');
 
+// -- Closing your phone, and what it costs --
+// p4 is a hider; p1 is the seeker at the centre.
+const closedState = await pages[4].evaluate(async () => {
+  await closePhone();
+  return {
+    screen: document.getElementById('closed-screen').classList.contains('on'),
+    closedAt: !!me().closedAt,
+    ticking: !!tickTimer,
+  };
+});
+check('closing your phone stops it reporting and says so',
+  closedState.screen && closedState.closedAt && closedState.ticking === false,
+  `screen ${closedState.screen}, tick ${closedState.ticking}`);
+
+// Everyone else sees them as unavailable, and a reading taken now is stale.
+const seenClosed = await until(host, () => playersState.p4.closedAt > 0);
+check('everyone else can see the phone is closed', seenClosed === true);
+
+// Pinged directly rather than by a probe: a sweep wide enough to catch this
+// player would also catch the hider due south and pollute the checks after.
+// This is the same call the probe makes.
+const staleSince = Date.now();
+await pages[1].evaluate(() => emitPing('p4',
+  { lat: playersState.p4.realLat, lng: playersState.p4.realLng }));
+const staleDot = await until(host, ([since]) => {
+  const fresh = (playersState.p4.pings || []).filter((d) => d.at > since);
+  return fresh.length ? { stale: fresh[fresh.length - 1].stale === true } : false;
+}, [staleSince], 15000);
+check('a reading taken while a phone is closed is marked stale',
+  !!staleDot && staleDot.stale === true);
+
+const staleRing = await pages[1].evaluate(() => {
+  renderWorld();
+  return worldLayer.getLayers().filter((l) =>
+    l.options && l.options.color === MAP.amber && l.options.fill === false
+    && l.options.radius === CONFIG.ping.dotRadiusPx + 5).length;
+});
+check('a stale dot is drawn with a yellow ring', staleRing >= 1, `${staleRing} rings`);
+
+// Coming back is not free: a minute closed is a position report owed.
+await pages[4].evaluate((perMs) => playerRef().update({ closedAt: Date.now() - 4 * perMs }), 60000);
+await until(pages[4], ([perMs]) => me().closedAt > 0 && Date.now() - me().closedAt > 3 * perMs, [60000]);
+const owed = await pages[4].evaluate(async () => {
+  await openPhone();
+  return { debt: me().pingDebt, screen: document.getElementById('closed-screen').classList.contains('on') };
+});
+check('every minute closed costs one position report on return',
+  owed.debt === 4 && owed.screen === false, `${owed.debt} owed`);
+
+// They are paid off one at a time, and they are ordinary pings.
+const repayment = await until(pages[4], ([start]) => {
+  const p = me();
+  const paid = (p.pings || []).filter((d) => d.at > start && !d.stale);
+  return p.pingDebt <= 2 ? { paid: paid.length, left: p.pingDebt } : false;
+}, [Date.now() - 1000], 60000);
+check('the debt is paid back one report at a time, not all at once',
+  !!repayment && repayment.left <= 2 && repayment.paid >= 1,
+  repayment ? `${repayment.paid} fresh dots, ${repayment.left} still owed` : 'nothing repaid');
+await pages[4].evaluate(() => playerRef().update({ pingDebt: 0, nextDebtPingAt: 0 }));
+
+// Long enough dark and they drop out — but it is a status, not an ending,
+// and the host can undo it.
+await pages[4].evaluate((ms) => playerRef().update({ lastContactAt: Date.now() - ms }), 16 * 60000);
+const wentAway = await until(host, () => playersState.p4.status === 'away', null, 20000);
+check('a phone dark for 15 minutes drops that player out', wentAway === true);
+const awayFrozen = await host.evaluate(() => ({
+  survival: playersState.p4.survivalMs,
+  role: playersState.p4.role,
+}));
+check('dropping out keeps their role and freezes their time, not ends it',
+  awayFrozen.survival !== null && awayFrozen.role === 'hider',
+  `${Math.round(awayFrozen.survival / 1000)}s banked as ${awayFrozen.role}`);
+
+await host.evaluate(() => reinstatePlayer('p4'));
+const reinstated = await until(pages[4], () => me().status === 'active', null, 20000);
+check('the host can put them back in', reinstated === true);
+const scoringFair = await host.evaluate(() => ({
+  away: playersState.p4.awayTotalMs,
+  survival: playersState.p4.survivalMs,
+  gameSoFar: Date.now() - gameStartAt,
+}));
+// Banked as away, their clock restarted, and the banked figure capped at the
+// length of the game so far — nobody can have been gone longer than the game
+// has been running, however stale their last contact looked.
+check('the time they were gone is not scored as survival',
+  scoringFair.survival === null
+  && scoringFair.away > 0
+  && scoringFair.away <= scoringFair.gameSoFar + 2000,
+  `${Math.round(scoringFair.away / 1000)}s banked as away, `
+  + `game is ${Math.round(scoringFair.gameSoFar / 1000)}s old`);
+await pages[4].evaluate(() => playerRef().update({ awayTotalMs: 0, pingDebt: 0 }));
+await teleport(4, off(-40, -150));
+
 // -- I SEE YOU: passive, theatrical, and mechanically inert --
 // p1 is the seeker at the centre; p3 is the hider due south of them.
 const isyOff = await pages[3].evaluate(() => ({
@@ -838,15 +931,20 @@ check('the hunt no longer hands out a bearing cone',
   && noCones.coneConfig === undefined,
   `${noCones.bearingFn}/${noCones.coneFn}/${noCones.coneConfig}`);
 
-// The first reading is due the instant the hunt is declared.
-const firstHuntDot = await until(host, () => {
-  const dots = playersState.p2.pings || [];
-  const mark = (playersState.p2.huntedBy || {}).p1;
-  return !!(mark && mark.lastPingAt && dots.length) && {
-    off: Math.round(distanceM(dots[dots.length - 1],
-      { lat: playersState.p2.realLat, lng: playersState.p2.realLng })),
+// The first reading is due the instant the hunt is declared. Waiting on a
+// dot newer than the hunt, not merely on the last dot in the trail — the
+// mark's lastPingAt is written before the ping lands, so the trail's tail is
+// still the previous reading for a moment.
+const huntSince = await host.evaluate(() => playersState.p2.huntedBy.p1.startedAt);
+const firstHuntDot = await until(host, ([since]) => {
+  const p = playersState.p2;
+  const fresh = (p.pings || []).filter((d) => d.at >= since);
+  if (!fresh.length) return false;
+  return {
+    off: Math.round(distanceM(fresh[fresh.length - 1],
+      { lat: p.realLat, lng: p.realLng })),
   };
-}, null, 20000);
+}, [huntSince], 20000);
 check('a hunt pings the hunted hider straight away',
   !!firstHuntDot && firstHuntDot.off <= 31,
   firstHuntDot ? `${firstHuntDot.off}m off true position` : 'no dot');

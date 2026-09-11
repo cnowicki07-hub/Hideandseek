@@ -135,6 +135,27 @@ function recenterOnSelf(lat, lng) {
 
 // The map follows you once, on the first fix, and then leaves you alone so
 // you can pan around. This is how you get back.
+// ---------- phone closed ----------
+
+function renderClosedState() {
+  const on = !!phoneClosed;
+  el('closed-screen').classList.toggle('on', on);
+  if (!on) return;
+  const mins = Math.round(CONFIG.offline.debtPerMs / 1000);
+  el('closed-cost').textContent =
+    `Every ${mins === 60 ? 'minute' : mins + ' seconds'} closed costs you one `
+    + 'position report when you come back, paid one every '
+    + `${Math.round(CONFIG.offline.debtPingIntervalMs / 1000)} seconds. Stay closed `
+    + `longer than ${Math.round(CONFIG.offline.awayAfterMs / 60000)} minutes and you `
+    + 'drop out of the game until the host puts you back.';
+}
+
+el('btn-open-phone').onclick = async () => {
+  const btn = el('btn-open-phone');
+  btn.disabled = true;
+  try { await openPhone(); } finally { btn.disabled = false; }
+};
+
 // ---------- daylight ----------
 //
 // The horror theme is right at dusk and wrong at noon: outdoor testing put
@@ -363,11 +384,16 @@ function renderLobbyList(players) {
   const list = el('lobby-players');
   const iAmHost = !!(players[playerId] && players[playerId].isHost);
   list.innerHTML = '';
+  const now = Date.now();
   Object.entries(players).forEach(([id, p]) => {
     if (p.status === 'kicked') return;
     const li = document.createElement('li');
+    const away = p.status === 'away';
+    const closed = !away && playerUnavailable(p, now);
     const label = `${p.name}${p.isHost ? ' (host)' : ''}`;
-    const role = p.role ? p.role : 'no role';
+    const role = (away ? 'dropped out' : closed ? 'phone closed' : null)
+      || (p.role ? p.role : 'no role');
+    if (away || closed) li.classList.add('is-away');
 
     if (!iAmHost) {
       li.textContent = `${label} — ${role}`;
@@ -375,7 +401,7 @@ function renderLobbyList(players) {
       return;
     }
 
-    li.className = 'row-pick';
+    li.classList.add('row-pick');
     const btn = document.createElement('button');
     btn.className = 'role-pick secondary role-' + (p.role || 'none');
     btn.innerHTML = `<span>${label}</span><span class="role-tag">${role}</span>`;
@@ -632,6 +658,13 @@ function renderBanners(p, now) {
     items.push(['danger', `OUT OF BOUNDS — eliminated in ${left}s.`]);
   } else if (boundaryWarningM != null) {
     items.push(['warn', `Approaching the boundary (${Math.round(boundaryWarningM)}m).`]);
+  }
+
+  // What you owe for going dark, and when the next instalment goes out.
+  if (p.pingDebt > 0) {
+    const due = Math.max(0, Math.ceil(((p.nextDebtPingAt || 0) - now) / 1000));
+    items.push(['warn', `${p.pingDebt} position report(s) owed for time offline`
+      + ` — next in ${due}s.`]);
   }
 
   // Being hunted is a countdown now, not a direction. You know exactly when
@@ -935,6 +968,16 @@ function openMenu() {
       host.appendChild(b);
     };
     if (isPaused()) mk('Resume game', resumeGame); else mk('Pause game', pauseGame);
+
+    // Greyed-out players are waiting on exactly this.
+    Object.entries(playersState)
+      .filter(([, x]) => x.status === 'away')
+      .forEach(([id, x]) => {
+        mk(`Put ${x.name} back in`, async () => {
+          await reinstatePlayer(id);
+          toast(`${x.name} is back in the game.`);
+        });
+      });
     mk('End game now', async () => { if (confirm('End the game for everyone?')) await endGameNow(); });
 
     // A stranger is not always spotted in the lobby, so the kick has to
@@ -957,6 +1000,17 @@ function openMenu() {
       host.appendChild(note);
     }
   }
+  const close = document.createElement('button');
+  close.className = 'secondary';
+  close.textContent = 'Close my phone';
+  close.onclick = async () => {
+    if (!confirm('Close your phone? You stop reporting, and every minute costs '
+      + 'you a position report when you come back.')) return;
+    el('menu-modal').style.display = 'none';
+    await closePhone();
+  };
+  host.appendChild(close);
+
   el('menu-modal').style.display = 'flex';
 }
 
@@ -983,6 +1037,9 @@ function onGameEvent(e) {
     case 'totem_destroyed': toast('A totem has been destroyed.'); break;
     case 'snitch_report': toast(`Someone sold out ${e.name}.`); break;
     case 'kicked': handleBeingKicked(); break;
+    case 'went_away': toast(`${e.name} has dropped out — no contact.`); break;
+    case 'reinstated': toast('The host has put you back in the game.'); break;
+    case 'player_reinstated': toast(`${e.name} is back in the game.`); break;
     case 'panic':
       showPanicAlert(e);
       break;
@@ -1192,6 +1249,16 @@ function renderTrails(p, now, add) {
       const look = pingAppearance(dot, now);
       if (!look) return;
       const fill = isSelf ? MAP.own : look.color;
+      // A dot made while that phone was closed is not where they are, it is
+      // where they were when it went dark. Ringed in yellow so nobody runs
+      // half a mile at a reading that was never live.
+      if (dot.stale) {
+        add(L.circleMarker([dot.lat, dot.lng], {
+          radius: CONFIG.ping.dotRadiusPx + 5,
+          color: MAP.amber, fill: false,
+          weight: 2, opacity: look.opacity, dashArray: '3 3',
+        }));
+      }
       add(L.circleMarker([dot.lat, dot.lng], {
         radius: CONFIG.ping.dotRadiusPx,
         // In daylight the tiles are left bright, and a white dot on a pale
@@ -1295,6 +1362,16 @@ function howToPlayHtml(role) {
        own at about 15 a minute, and there is a cooldown after each use, so you
        cannot chain them. You have your whole side's set — there is nothing to
        choose in advance. Tap and hold a power to read what it does.</p>
+
+    <h4>Closing your phone</h4>
+    <p>A ninety-minute game outlives some batteries. <strong>Menu → Close my
+       phone</strong> stops you reporting entirely. A phone that locks itself in
+       a pocket ends up in the same place, and the game treats them the same.</p>
+    <p>It is not free. While you are dark, anyone who pays to find you gets your
+       <em>last known</em> position, ringed in yellow so they know it is stale —
+       and every minute you are closed costs you one position report when you
+       come back, paid out one every thirty seconds. Fifteen minutes dark and you
+       drop out of the game until the host puts you back in.</p>
 
     <h4>Staying safe</h4>
     <p>Stay inside the boundary. Step outside and a countdown starts, you are out
@@ -1402,7 +1479,7 @@ const OUTCOME_LABEL = {
   active: 'survived',
   captured: 'found',
   boundary_eliminated: 'out of bounds',
-  offline_eliminated: 'lost contact',
+  away: 'lost contact',
   quit: 'withdrew',
   kicked: 'removed',
   panicked: 'panic',

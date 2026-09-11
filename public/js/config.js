@@ -136,9 +136,24 @@ const CONFIG = {
     diagonalFraction: 0.5,
   },
 
+  // Phones get closed — deliberately, to save battery, or because they lock
+  // themselves in a pocket. A closed phone stops reporting, so everything
+  // anyone knows about that player goes stale. None of this is free.
   offline: {
-    flagAfterMs: 15 * 60000,
-    eliminateAfterMs: 30 * 60000,
+    // Said nothing for this long and you are treated as closed, whether or
+    // not you pressed the button. Positions write at least every 30s and the
+    // tick heartbeats every 60s, so this only trips on a genuinely dark phone.
+    staleAfterMs: 90000,
+    // The debt: one owed position report per full minute unavailable...
+    debtPerMs: 60000,
+    // ...paid off at this rate once you are back. Going dark for five minutes
+    // costs you five dots over the two and a half minutes after you return.
+    debtPingIntervalMs: 30000,
+    // A dead battery should not buy an hour of exposure on return.
+    maxDebt: 20,
+    // Unavailable this long and you are greyed out of the game until the host
+    // puts you back.
+    awayAfterMs: 15 * 60000,
   },
 };
 
@@ -206,6 +221,13 @@ function applyGameMode(mode) {
   CONFIG.hunt.noCaptureCooldownMs = shorter(CONFIG.hunt.noCaptureCooldownMs);
   CONFIG.hunt.durationMs = shorter(CONFIG.hunt.durationMs);
   CONFIG.hunt.pingIntervalMs = shorter(CONFIG.hunt.pingIntervalMs);
+
+  // Deliberately NOT scaled: staleAfterMs and debtPingIntervalMs are about how
+  // long a real phone takes to lock and how fast a person reads their screen,
+  // neither of which cares that the round is ten minutes long. The two that
+  // are about game time do scale.
+  CONFIG.offline.debtPerMs = shorter(CONFIG.offline.debtPerMs);
+  CONFIG.offline.awayAfterMs = shorter(CONFIG.offline.awayAfterMs);
 
   CONFIG.boundary.breachTimerMs = shorter(CONFIG.boundary.breachTimerMs);
 

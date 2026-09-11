@@ -144,7 +144,7 @@ backend works. `living-room.mjs` runs a browser with **no geolocation
 permission granted at all**, which is the point: the indoor game has to work
 on a device with no usable GPS.
 
-The outdoor suite drives a full five-player game and asserts 123 rules:
+The outdoor suite drives a full five-player game and asserts 133 rules:
 that nothing pings on its own, the Probe's half-world sweep and the 30m
 error on what it reports, dot colour across its ten-minute life, that the
 map carries no label of any kind except a panic alert, every power's effect
@@ -152,8 +152,10 @@ as seen from the *other* player's client, totem scaling and sabotage
 accrual/decay, hunt readings and the two powers that answer them, snitch
 fidelity bands, signpost discovery,
 hand-assigned roles, daylight mode, I SEE YOU appearing at 20m and letting
-every tap through, boundary breach exposure, capture, scoring, and that two
-concurrent transactions can't lose an update.
+every tap through, closing a phone and the yellow-ringed stale readings and
+repayment debt that follow, being greyed out and reinstated, boundary breach
+exposure, capture, scoring, and that two concurrent transactions can't lose an
+update.
 
 It also drives the two things outdoor testing broke: an uninvited player
 arriving by QR code — who has to stop and give a name, and cannot get back
@@ -308,6 +310,34 @@ in an open field — and it is remembered, so it survives the reload between
 rounds. Set it from the landing screen before you start, or the **☀** button
 on the map at any time.
 
+## Closing your phone
+
+A phone is a battery, and a ninety-minute game outlives some of them. **Menu →
+Close my phone** stops you reporting: the position watch and the rules tick
+both stop, and a dead screen with one button on it replaces the game. A phone
+that locks itself in a pocket ends up in exactly the same state — nothing has
+been heard from it for 90 seconds — and is treated identically, because to
+everyone else the two are the same thing.
+
+**What everyone else sees.** They can still be pinged, because a seeker's
+probe hits their last known position — but that position is not where they
+are, it is where they were when the phone went dark. Those dots are marked
+stale and drawn with a **yellow ring**, so nobody runs half a mile at a
+reading that was never live.
+
+**What it costs.** One owed position report per full minute unavailable, paid
+back once you are open again at **one every thirty seconds**, starting
+immediately. Five minutes dark is five dots over the two and a half minutes
+after you return. They are ordinary pings: the usual 30m error, and both Go
+quiet and Decoy can answer them. Going dark is a cost, not a sentence — but
+it is not a way to disappear.
+
+**Fifteen minutes** unavailable and you are **greyed out** of the game. That
+is a status, not an ending: you keep your role, your charge and your capture
+code, and **the host can put you back in** from their menu. Your clock stops
+while you are out, and the time you were dark is not scored as survival —
+otherwise closing your phone would be the strongest hiding move in the game.
+
 ## Signposts
 
 A sign is invisible until you **walk within 10m of it**. After that it stays
@@ -427,14 +457,18 @@ authoritative checks into `src/server.js` is the obvious next step.
 
 ## Known limitations of this build
 
-- Screen must stay on and the tab must stay in the foreground the whole
-  game — backgrounding will pause GPS updates on most phones.
+- Screen must stay on and the tab must stay in the foreground while you are
+  playing — backgrounding pauses GPS updates on most phones. That is now a
+  handled state rather than a silent failure: the game notices the gap, marks
+  what everyone knows about you as stale, and charges you for it. See
+  [Closing your phone](#closing-your-phone).
 - No cheat-prevention: there is no server, so every rule is enforced by
   each player's own client against itself. A technically-minded player
   could open dev tools and read or write game state directly, including
   seeing hiders they shouldn't. Fine for trusted friends, not beyond that.
 - Capture code lookup assumes capture codes are unique within a game (they
   will be in practice at five players, but isn't formally enforced).
-- A dead battery is a dead player. Bring a power bank for anything over
-  90 minutes; the app deliberately does not degrade its ping rate to save
-  power, because that would be unfair.
+- A dead battery is still the main enemy. Bring a power bank for anything
+  over 90 minutes. Closing your phone (above) is the supported way to save
+  it — the app deliberately does not degrade its reporting rate on its own,
+  because that would silently make one player harder to find than the rest.
