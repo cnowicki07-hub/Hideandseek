@@ -122,6 +122,29 @@
   <div id="banner-strip"></div>
   <div id="scan-glow"></div>
 
+  <!-- Passive. Shown to a hider standing within 20m of a seeker. It does
+       nothing to the app on purpose: it is a rule about the player's legs,
+       enforced by the player, and the interface underneath stays usable. -->
+  <div id="i-see-you" aria-hidden="true">
+    <svg width="0" height="0" aria-hidden="true" focusable="false">
+      <filter id="drip-goo">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
+        <feColorMatrix in="blur" mode="matrix"
+          values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 26 -12" result="goo"/>
+        <feBlend in="SourceGraphic" in2="goo"/>
+      </filter>
+    </svg>
+    <div class="isy-goo">
+      <div class="isy-words">
+        <span>I</span><span>&nbsp;</span><span>S</span><span>E</span><span>E</span>
+        <span>&nbsp;</span><span>Y</span><span>O</span><span>U</span>
+        <i class="drip d1"></i><i class="drip d2"></i><i class="drip d3"></i>
+        <i class="drip d4"></i><i class="drip d5"></i>
+      </div>
+    </div>
+    <p class="isy-rule">You can hide&hellip; but you can't run.</p>
+  </div>
+
   <div id="hiding-bar" style="display:none">
     <div id="hiding-text"></div>
     <button id="btn-declare-hidden">I'm hidden</button>

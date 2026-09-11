@@ -192,6 +192,31 @@ async function placeSignpost(text) {
   toast('Signpost placed.');
 }
 
+// ---------- I SEE YOU ----------
+//
+// Distance to the closest active seeker, from true positions — this is a
+// physical proximity rule like a tripwire, not a reading, so the 30m display
+// jitter has nothing to do with it.
+function nearestSeekerM(now) {
+  if (!myPos) return Infinity;
+  let best = Infinity;
+  Object.entries(playersState).forEach(([id, p]) => {
+    if (id === playerId || p.role !== 'seeker' || p.status !== 'active') return;
+    if (p.realLat == null) return;
+    best = Math.min(best, distanceM(myPos, { lat: p.realLat, lng: p.realLng }));
+  });
+  return best;
+}
+
+// True when this player must stop running. Hiders only, and only once the
+// hunt is actually on — during hiding time the seekers are frozen at the
+// start line and every hider walks past them on the way out.
+function iSeeYouActive(p, now) {
+  if (!p || p.role !== 'hider' || p.status !== 'active') return false;
+  if (!gameState || gameState.status !== 'active' || isPaused()) return false;
+  return nearestSeekerM(now) <= CONFIG.seekerPowers.i_see_you.radiusM;
+}
+
 // Signs you have walked into. Kept per player and per game, and remembered
 // across a reload so a dropped connection does not un-discover the map.
 const discoveredSignposts = new Set();

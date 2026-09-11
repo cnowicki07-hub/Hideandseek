@@ -380,6 +380,7 @@ function renderLobbyList(players) {
     btn.className = 'role-pick secondary role-' + (p.role || 'none');
     btn.innerHTML = `<span>${label}</span><span class="role-tag">${role}</span>`;
     btn.title = 'Tap to change this player\'s role';
+    btn.setAttribute('aria-label', `${p.name} — ${role}. Tap to change their role.`);
     btn.onclick = async () => {
       const next = ROLE_CYCLE[(ROLE_CYCLE.indexOf(p.role || null) + 1) % ROLE_CYCLE.length];
       btn.disabled = true;
@@ -443,7 +444,11 @@ function renderLobby(players) {
       + 'What you get back is only good to about 30m, so someone standing still '
       + 'can look like they are moving.<br><br>'
       + 'To catch someone you have to physically reach them and get them to read '
-      + 'out their 4-letter code. There is no tag button.';
+      + 'out their 4-letter code. There is no tag button.<br><br>'
+      + 'You are always carrying <strong>I SEE YOU</strong>: get within 20m of a '
+      + 'hider and their whole screen tells them they may no longer run. It '
+      + 'costs nothing and tells you nothing — it just means the last 20m is '
+      + 'a walk, for both of you.';
   } else {
     title.textContent = "You're a HIDER";
     note.innerHTML =
@@ -453,7 +458,10 @@ function renderLobby(players) {
       + 'the dot they get is up to 30m out.<br><br>'
       + '<strong>Go quiet</strong> eats the next ping aimed at you. '
       + '<strong>Decoy</strong> sends that ping somewhere you are not. '
-      + '<strong>Seeker scan</strong> is your only way of ever seeing them.';
+      + '<strong>Seeker scan</strong> is your only way of ever seeing them.<br><br>'
+      + 'One rule you enforce yourself: if <strong>I SEE YOU</strong> fills your '
+      + "screen, a seeker is within 20m and you can no longer run. Walk until "
+      + "it clears. You can hide, but you can't run.";
   }
 
   if (p.isHost) renderHostLobbyStatus(players);
@@ -555,6 +563,7 @@ function refreshHud() {
   el('hud-role').textContent = p.status === 'active' ? (p.role || '—') : p.status.replace('_', ' ');
   renderHidingBar(p, now);
   renderBanners(p, now);
+  renderISeeYou(p, now);
   refreshPowerButtons(p, now);
   refreshActionButtons(p, now);
 }
@@ -597,6 +606,18 @@ function renderHidingBar(p, now) {
   }
 }
 
+// Nothing here changes the game. The overlay is inert and lets every tap
+// through; what it changes is what the player is allowed to do with their
+// legs, and only they can enforce that.
+let iSeeYouShowing = false;
+function renderISeeYou(p, now) {
+  const on = iSeeYouActive(p, now);
+  if (on === iSeeYouShowing) return;
+  iSeeYouShowing = on;
+  el('i-see-you').classList.toggle('on', on);
+  if (on) toast('A seeker is on top of you. WALK.');
+}
+
 function renderBanners(p, now) {
   const strip = el('banner-strip');
   const items = [];
@@ -613,22 +634,26 @@ function renderBanners(p, now) {
     items.push(['warn', `Approaching the boundary (${Math.round(boundaryWarningM)}m).`]);
   }
 
+  // Being hunted is a countdown now, not a direction. You know exactly when
+  // your position goes out, which is what makes spending Go quiet or a Decoy
+  // a decision rather than a guess.
   const marks = activeMarksOn(p, now);
   marks.forEach((m) => {
     const hunter = playersState[m.seekerId];
-    const reading = huntBearing(playerId, m.seekerId, now);
-    const dir = reading ? `${Math.round(reading.bearing)}° ±${Math.round(reading.coneHalfWidthDeg)}°` : 'no reading';
-    items.push(['danger', `HUNTED by ${hunter ? hunter.name : 'a seeker'} — they are ${dir} from you.`]);
+    const secs = Math.max(0, Math.ceil((huntNextPingAt(m) - now) / 1000));
+    items.push(['danger',
+      `HUNTED by ${hunter ? hunter.name : 'a seeker'} — your position goes out in ${secs}s.`]);
   });
   const totemBanner = totemStatusBanner(p, now);
   if (totemBanner) items.push(totemBanner);
 
   if (p.activeHunt && now < p.activeHunt.expiresAt) {
     const t = playersState[p.activeHunt.targetId];
-    const reading = huntBearing(playerId, p.activeHunt.targetId, now);
-    const dir = reading ? `${Math.round(reading.bearing)}° ±${Math.round(reading.coneHalfWidthDeg)}°` : 'no reading';
+    const mark = t && (t.huntedBy || {})[playerId];
+    const due = mark ? Math.max(0, Math.ceil((huntNextPingAt(mark) - now) / 1000)) : null;
     const left = Math.ceil((p.activeHunt.expiresAt - now) / 60000);
-    items.push(['info', `Hunting ${t ? t.name : '?'} — ${dir}, ${left} min left.`]);
+    items.push(['info', `Hunting ${t ? t.name : '?'} — next reading`
+      + (due == null ? ' shortly' : ` in ${due}s`) + `, ${left} min left.`]);
   }
 
   strip.innerHTML = '';
@@ -951,7 +976,9 @@ function onGameEvent(e) {
     case 'lockout': toast('A seeker has locked out your powers.'); break;
     case 'pinged': toast('You have just been pinged.'); break;
     case 'go_quiet_used': toast('Go quiet absorbed a ping. You are visible again.'); break;
-    case 'hunted': toast('You are being hunted.'); break;
+    case 'hunted':
+      toast('You are being hunted — your position goes out every three minutes.');
+      break;
     case 'hunt_cleared': toast('Your mark was cleared — they sabotaged a totem.'); break;
     case 'totem_destroyed': toast('A totem has been destroyed.'); break;
     case 'snitch_report': toast(`Someone sold out ${e.name}.`); break;
@@ -1206,22 +1233,8 @@ function renderReveals(p, now, add) {
     });
   }
 
-  // Hunt cone, drawn from whoever holds the reading.
-  const marks = activeMarksOn(p, now);
-  const cones = [];
-  if (p.activeHunt && now < p.activeHunt.expiresAt) cones.push(p.activeHunt.targetId);
-  marks.forEach((m) => cones.push(m.seekerId));
-  if (p.realLat) {
-    cones.forEach((otherId) => {
-      const reading = huntBearing(playerId, otherId, now);
-      if (!reading) return;
-      add(L.polygon(arcPolygon({ lat: p.realLat, lng: p.realLng },
-        reading.bearing, reading.coneHalfWidthDeg, Math.max(200, 0.2 * M)), {
-        color: MAP.blood, fillColor: MAP.bloodDim, fillOpacity: 0.1,
-        weight: 1, dashArray: '5 5',
-      }));
-    });
-  }
+  // No hunt cone. A hunt reports as ordinary dots on the hunted player's
+  // trail, which is what lets Go quiet and Decoy answer it.
 }
 
 // ---------- Scan: direction only, at the edge of the screen ----------
@@ -1308,9 +1321,18 @@ function howToPlayHtml(role) {
       <p><strong>Tripwires</strong> cost almost nothing and are the only exact
          reading in the game — but you have to guess where somebody will walk.
          Line the gates and paths.</p>
-      <p>If nobody's been caught for a while, you can start a <strong>Hunt</strong> —
-         you get a bearing to one hider, refreshed every 30 seconds. They get told,
-         and they get a bearing back to you, so it becomes a chase.</p>
+      <p>You also carry <strong>I SEE YOU</strong>, which costs nothing and is
+         always on. Any hider who comes within 20m of you gets it across their
+         whole screen, and from that moment <em>they are not allowed to run</em>
+         — only walk — until they are clear of you. It tells you nothing and
+         does nothing on its own. It just means that once you are close, they
+         cannot simply sprint away from you.</p>
+      <p>If nobody's been caught for a while, you can start a <strong>Hunt</strong>
+         on one hider. It costs no charge, and for ten minutes their position is
+         reported to you every three minutes — four readings, free. They are told
+         it is happening and they know when each one is due, so expect them to
+         spend <strong>Go quiet</strong> on one of them and a <strong>Decoy</strong>
+         to poison the rest. Hunt someone you can already close on.</p>
       ${common}`;
   }
 
@@ -1329,11 +1351,22 @@ function howToPlayHtml(role) {
          for three minutes, anything that pings you pings a fake you instead,
          walking away on a bearing you choose. The seeker gets a real dot, in the
          wrong place, moving.</p>
-      <p>Two things that aren't obvious. <strong>Totems</strong> are watchtowers
+      <p>Get within 20m of a seeker and <strong>I SEE YOU</strong> fills your
+         screen. Everything still works — you can read the map, spend powers,
+         do anything you could do a second ago. What changes is you:
+         <em>you can hide, but you can't run</em>. While it is up you walk.
+         Nobody's phone can make you, which is exactly why it is on yours.</p>
+      <p>If a seeker starts a <strong>Hunt</strong> on you, you are told, and
+         from then on your position goes out to them every three minutes for ten
+         minutes. The banner counts down to each one, so you can see the reading
+         coming: <strong>Go quiet</strong> eats one outright, a
+         <strong>Decoy</strong> sends the whole run of them somewhere you are
+         not. You can also <strong>Snitch</strong> while hunted — sell out
+         another hider to get the seeker off you. They're never told it was
+         you.</p>
+      <p>One more that isn't obvious. <strong>Totems</strong> are watchtowers
          seekers can drop; standing inside one reports you anonymously and
-         exactly. Two hiders standing at one together can destroy it. And if
-         you're being hunted, you can <strong>Snitch</strong> — sell out another
-         hider to get the seeker off you. They're never told it was you.</p>
+         exactly. Two hiders standing at one together can destroy it.</p>
       ${common}`;
   }
 

@@ -39,16 +39,6 @@ function destinationPoint(start, bearing, dist) {
   return { lat: toDeg(lat2), lng: (toDeg(lng2) + 540) % 360 - 180 };
 }
 
-// Interpolate the error cone half-width (deg) for the Hunt bearing,
-// based on distance: wide far away, narrow up close.
-function huntConeHalfWidthDeg(distM) {
-  const { coneDegAt500m, coneDegAt100m } = CONFIG.hunt;
-  if (distM >= 500) return coneDegAt500m / 2;
-  if (distM <= 100) return coneDegAt100m / 2;
-  const t = (distM - 100) / (500 - 100);
-  return (coneDegAt100m + t * (coneDegAt500m - coneDegAt100m)) / 2;
-}
-
 // ---------- polygon helpers (boundary) ----------
 
 // Project lat/lng to local metres about an origin. Fine for play areas of a

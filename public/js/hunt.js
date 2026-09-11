@@ -1,10 +1,15 @@
 // Tier 4 — the Hunt and Snitch (design doc Sections 7 and 5.2).
 //
 // The Hunt is deliberately independent of the charge economy: it costs
-// nothing and is gated only by the global no-capture timer. Bearings are
-// computed on each party's own client from positions both already hold, and
-// are refreshed every 30s rather than continuously, so the information
-// stays as coarse as the design intends.
+// nothing and is gated only by the global no-capture timer. It is the answer
+// to a stalemate, not a power.
+//
+// It used to hand both parties a bearing cone computed from true positions,
+// which meant a hunted hider's Go quiet and Decoy did nothing at all against
+// the one thing actually chasing them. It now produces an ordinary ping on
+// the hunted hider every few minutes instead — same jitter, same dot, same
+// counters — so the two powers a hider has for exactly this moment work at
+// exactly this moment.
 
 function huntAvailableAt(now) {
   if (!gameState || gameState.status !== 'active') return null;
@@ -61,44 +66,38 @@ function activeMarksOn(p, now) {
     .map(([seekerId, m]) => ({ seekerId, ...m }));
 }
 
-// ---------- bearings ----------
-// Cached so the reading genuinely refreshes on the configured cadence.
+// ---------- exposure ----------
 
-const huntBearingCache = {};
+// When the next reading on a mark is due. The first is due the instant the
+// hunt is declared, so a hunt does something immediately rather than buying
+// three minutes of nothing.
+function huntNextPingAt(mark) {
+  return mark.lastPingAt ? mark.lastPingAt + CONFIG.hunt.pingIntervalMs : mark.startedAt;
+}
 
-function huntBearing(fromId, toId, now) {
-  now = now || Date.now();
-  const key = fromId + '>' + toId;
-  const cached = huntBearingCache[key];
-  if (cached && now - cached.at < CONFIG.hunt.bearingRefreshMs) return cached;
-
-  const a = playersState[fromId];
-  const b = playersState[toId];
-  if (!a || !b || !a.realLat || !b.realLat) return cached || null;
-
-  const from = { lat: a.realLat, lng: a.realLng };
-  const to = { lat: b.realLat, lng: b.realLng };
-  const dist = distanceM(from, to);
-  const reading = {
-    bearing: bearingDeg(from, to),
-    coneHalfWidthDeg: huntConeHalfWidthDeg(dist),
-    at: now,
-  };
-  huntBearingCache[key] = reading;
-  return reading;
+// Run by the hunted hider's own client, like tripwires and boundary breach:
+// being hunted means your own phone gives you up on a clock. Routed through
+// emitPing with no `ignoreCounters`, which is the whole point — Go quiet eats
+// one of these, and a Decoy sends three minutes of them somewhere else.
+function tickHuntExposure(p, now) {
+  if (!myPos) return;
+  activeMarksOn(p, now).forEach((m) => {
+    if (now < huntNextPingAt(m)) return;
+    // Written before the ping so a slow round trip cannot fire it twice.
+    playerRef().update({ ['huntedBy.' + m.seekerId + '.lastPingAt']: now }).catch(() => {});
+    // Notified, deliberately: you should know the moment your position went
+    // out, and if Go quiet ate it you should know that too.
+    emitPing(playerId, myPos);
+  });
 }
 
 function tickHunt(p, now) {
-  if (p.activeHunt) {
-    if (now >= p.activeHunt.expiresAt) {
-      playerRef().update({ activeHunt: null }).catch(() => {});
-      toast('Your hunt lapsed.');
-    } else {
-      huntBearing(playerId, p.activeHunt.targetId, now);
-    }
+  if (p.activeHunt && now >= p.activeHunt.expiresAt) {
+    playerRef().update({ activeHunt: null }).catch(() => {});
+    toast('Your hunt lapsed.');
   }
-  const marks = activeMarksOn(p, now);
-  marks.forEach((m) => huntBearing(playerId, m.seekerId, now));
+
+  if (p.role === 'hider' && p.status === 'active') tickHuntExposure(p, now);
 
   // Drop expired marks so the UI stops showing them.
   const stale = Object.entries(p.huntedBy || {}).filter(([, m]) => now >= m.expiresAt);

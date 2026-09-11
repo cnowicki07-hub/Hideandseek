@@ -254,12 +254,19 @@ const guestPicks = await pages[2].evaluate(() =>
   document.querySelectorAll('#lobby-players .role-pick').length);
 check('other players get no role controls', guestPicks === 0, `${guestPicks} controls`);
 
-// Tap Hide1's row twice: unassigned -> seeker -> hider.
-const rowIndex = await host.evaluate(() => Object.keys(playersState).indexOf('p2'));
-await host.evaluate((i) => document.querySelectorAll('#lobby-players .role-pick')[i].click(), rowIndex);
+// Tap Hide1's row twice: unassigned -> seeker -> hider. Picked by name, not
+// by index — a removed player is skipped in the list but still in the state.
+const tapRole = () => host.evaluate(() => {
+  const btn = [...document.querySelectorAll('#lobby-players .role-pick')]
+    .find((b) => b.getAttribute('aria-label').startsWith('Hide1 '));
+  if (!btn) return false;
+  btn.click();
+  return true;
+});
+check('the role control is on the right row', (await tapRole()) === true);
 const madeSeeker = await until(host, () => playersState.p2.role === 'seeker');
 check('tapping a player makes them a seeker', madeSeeker === true);
-await host.evaluate((i) => document.querySelectorAll('#lobby-players .role-pick')[i].click(), rowIndex);
+await tapRole();
 const madeHider = await until(host, () => playersState.p2.role === 'hider');
 check('tapping again makes them a hider', madeHider === true);
 
@@ -424,6 +431,70 @@ const mapLabels = await pages[1].evaluate(() => {
 check('nothing on the map carries a label', mapLabels.length === 0,
   mapLabels.length ? mapLabels.join(' | ') : 'no labels on any layer');
 
+// -- I SEE YOU: passive, theatrical, and mechanically inert --
+// p1 is the seeker at the centre; p3 is the hider due south of them.
+const isyOff = await pages[3].evaluate(() => ({
+  shown: document.getElementById('i-see-you').classList.contains('on'),
+  toSeeker: Math.round(nearestSeekerM()),
+}));
+check('I SEE YOU stays off at a distance', isyOff.shown === false,
+  `${isyOff.toSeeker}m from the nearest seeker`);
+
+await teleport(3, off(0, 12));   // 12m from the seeker at the centre
+const isyOn = await until(pages[3], () =>
+  document.getElementById('i-see-you').classList.contains('on'), null, 20000);
+check('walking within 20m of a seeker puts I SEE YOU on the hider\'s screen',
+  isyOn === true);
+
+const isyLook = await pages[3].evaluate(() => {
+  const n = document.getElementById('i-see-you');
+  const style = getComputedStyle(n);
+  const under = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+  return {
+    words: n.querySelector('.isy-words').textContent.replace(/\s+/g, ' ').trim(),
+    rule: n.querySelector('.isy-rule').textContent,
+    passesTaps: style.pointerEvents === 'none',
+    // Whatever is under the middle of the screen, it must not be the overlay.
+    hitsOverlay: !!(under && under.closest && under.closest('#i-see-you')),
+    drips: n.querySelectorAll('.drip').length,
+  };
+});
+check('it says I SEE YOU', isyLook.words === 'I SEE YOU', isyLook.words);
+check('and tells them the rule', /can hide.*can't run/i.test(isyLook.rule), isyLook.rule);
+check('it drips', isyLook.drips === 5, `${isyLook.drips} drips`);
+check('it lets every tap through to the interface underneath',
+  isyLook.passesTaps === true && isyLook.hitsOverlay === false);
+
+// Mechanically inert: it must not touch charge, powers or position.
+const isyInert = await pages[3].evaluate(async () => {
+  await playerRef().update({
+    cooldownUntil: 0, chargeCheckpoint: 100, chargeCheckpointAt: Date.now(),
+    activePower: null, activePowerExpiresAt: 0,
+  });
+  await new Promise((r) => setTimeout(r, 150));
+  return {
+    blocked: powerBlockedReason('go_quiet', me()),
+    charge: Math.floor(currentCharge(me())),
+    stillReporting: me().realLat != null,
+  };
+});
+check('it changes nothing about what a hider can do',
+  isyInert.blocked === null && isyInert.charge >= 99 && isyInert.stillReporting,
+  `powers ${isyInert.blocked || 'available'}, charge ${isyInert.charge}`);
+
+// Seekers are told nothing at all — a free passive reading would break the
+// rule that every dot on the map was paid for.
+const seekerSeesNothing = await pages[1].evaluate(() => ({
+  overlay: document.getElementById('i-see-you').classList.contains('on'),
+  dots: Object.values(playersState).reduce((n, x) => n + (x.pings || []).length, 0),
+}));
+check('the seeker is told nothing by it', seekerSeesNothing.overlay === false);
+
+await teleport(3, off(0, -200));   // back south, clear of the seeker
+const isyCleared = await until(pages[3], () =>
+  !document.getElementById('i-see-you').classList.contains('on'), null, 20000);
+check('it clears once the hider is clear', isyCleared === true);
+
 // -- Daylight mode: readable in a bright field, per player --
 // Read the tile rule off a probe element rather than a real tile: OSM tiles
 // do not load in this sandbox, and the point is the CSS, not the imagery.
@@ -513,21 +584,24 @@ await runPower(4, 'decoy', { bearing: 90 });
 await teleport(4, DECOY_TRUE);
 await runPower(1, 'probe', { point: off(0, -400) });
 await host.waitForTimeout(1000);
-const decoyed = await host.evaluate(([cast]) => {
+// Measured against where the decoy actually was when the dot was made, not
+// where it set off: it has been walking the whole time, so the cast point is
+// only an approximation and the jitter bound has to sit on the real one.
+const decoyed = await host.evaluate(() => {
   const p = playersState.p4;
   const dot = (p.pings || [])[p.pings.length - 1];
   if (!dot) return null;
   return {
     fromTrue: Math.round(distanceM(dot, { lat: p.realLat, lng: p.realLng })),
-    fromCast: Math.round(distanceM(dot, cast)),
+    fromDecoy: Math.round(distanceM(dot, decoyPositionAt(p.decoy, dot.at))),
   };
-}, [DECOY_CAST]);
+});
 check('decoy makes the ping land where you are not',
   decoyed && decoyed.fromTrue > 250,
   decoyed ? `${decoyed.fromTrue}m from the real player` : 'no dot');
 check('the ping lands on the decoy instead',
-  decoyed && decoyed.fromCast <= 31,
-  decoyed ? `${decoyed.fromCast}m from where the decoy set off` : 'no dot');
+  decoyed && decoyed.fromDecoy <= 31,
+  decoyed ? `${decoyed.fromDecoy}m from the decoy itself` : 'no dot');
 
 // And the decoy is walking, not standing: a minute on, it is a minute's walk
 // along the bearing that was picked.
@@ -752,18 +826,73 @@ const huntState = await host.evaluate(() => ({
 }));
 check('hunt marks the chosen target', huntState.seeker && huntState.target.includes('p1'));
 
-const bearings = await host.evaluate(() => {
-  const toTarget = huntBearing('p1', 'p2');
-  const back = huntBearing('p2', 'p1');
-  const sep = (((toTarget.bearing - back.bearing) % 360) + 360) % 360;
-  return { toTarget, back, sep };
-});
-check('hunted player sees the reciprocal bearing back',
-  Math.abs(bearings.sep - 180) < 2,
-  `${Math.round(bearings.toTarget.bearing)}° vs ${Math.round(bearings.back.bearing)}° (separation ${Math.round(bearings.sep)}°)`);
-check('cone narrows with distance',
-  bearings.toTarget.coneHalfWidthDeg >= 5 && bearings.toTarget.coneHalfWidthDeg <= 20,
-  `±${bearings.toTarget.coneHalfWidthDeg.toFixed(1)}°`);
+// A hunt reports as ordinary dots, not a cone — that is what lets a hider's
+// two defensive powers answer the one thing actually chasing them.
+const noCones = await host.evaluate(() => ({
+  bearingFn: typeof huntBearing,
+  coneFn: typeof huntConeHalfWidthDeg,
+  coneConfig: CONFIG.hunt.coneDegAt500m,
+}));
+check('the hunt no longer hands out a bearing cone',
+  noCones.bearingFn === 'undefined' && noCones.coneFn === 'undefined'
+  && noCones.coneConfig === undefined,
+  `${noCones.bearingFn}/${noCones.coneFn}/${noCones.coneConfig}`);
+
+// The first reading is due the instant the hunt is declared.
+const firstHuntDot = await until(host, () => {
+  const dots = playersState.p2.pings || [];
+  const mark = (playersState.p2.huntedBy || {}).p1;
+  return !!(mark && mark.lastPingAt && dots.length) && {
+    off: Math.round(distanceM(dots[dots.length - 1],
+      { lat: playersState.p2.realLat, lng: playersState.p2.realLng })),
+  };
+}, null, 20000);
+check('a hunt pings the hunted hider straight away',
+  !!firstHuntDot && firstHuntDot.off <= 31,
+  firstHuntDot ? `${firstHuntDot.off}m off true position` : 'no dot');
+
+// And it is an ordinary ping, so Go quiet eats one.
+await pages[2].evaluate(() => playerRef().update({
+  goQuietUntil: Date.now() + 120000,
+  ['huntedBy.p1.lastPingAt']: Date.now() - CONFIG.hunt.pingIntervalMs,
+}));
+const dotsBeforeQuiet = await dotsOf('p2');
+const quietAte = await until(host, ([before]) =>
+  !playersState.p2.goQuietUntil && (playersState.p2.pings || []).length === before,
+[dotsBeforeQuiet], 20000);
+check('go quiet answers a hunt reading', quietAte === true,
+  `${await dotsOf('p2')} dots, was ${dotsBeforeQuiet}`);
+
+// A decoy poisons the ones after it. Cast it, walk a long way off, and only
+// then make a reading due — otherwise the tick fires mid-teleport and the
+// dot lands before the player has gone anywhere.
+await pages[2].evaluate(() => playerRef().update({
+  decoy: {
+    originLat: myPos.lat, originLng: myPos.lng,
+    bearing: 90, startedAt: Date.now(), expiresAt: Date.now() + 180000,
+  },
+}));
+await teleport(2, off(250, 200));
+const decoySince = Date.now();
+await pages[2].evaluate((ms) => playerRef().update({
+  ['huntedBy.p1.lastPingAt']: Date.now() - ms,
+}), 3 * 60000);
+const decoyedHunt = await until(host, ([since]) => {
+  const p = playersState.p2;
+  const dots = (p.pings || []).filter((d) => d.at > since);
+  if (!dots.length || !p.decoy) return false;
+  const last = dots[dots.length - 1];
+  return {
+    fromTrue: Math.round(distanceM(last, { lat: p.realLat, lng: p.realLng })),
+    fromDecoy: Math.round(distanceM(last, decoyPositionAt(p.decoy, last.at))),
+  };
+}, [decoySince], 25000);
+check('a decoy sends the hunt readings somewhere you are not',
+  !!decoyedHunt && decoyedHunt.fromTrue > 150 && decoyedHunt.fromDecoy <= 31,
+  decoyedHunt ? `${decoyedHunt.fromTrue}m from the player, ${decoyedHunt.fromDecoy}m from the decoy`
+    : 'no dot');
+await pages[2].evaluate(() => playerRef().update({ decoy: null }));
+await teleport(2, off(0, 3));   // back where the sabotage and snitch checks expect
 
 // Snitch: only available while hunted.
 const snitchBlockedForUnhunted = await pages[4].evaluate(() => snitchAvailableReason(me()));
@@ -782,16 +911,17 @@ check('snitch survey bands fidelity by range',
   survey.find((s) => s.name === 'Hide2').r === 50,
   survey.map((s) => `${s.name}@${s.d}m=${s.r || 'exact'}`).join(', '));
 
-const dotsBeforeSnitch = await dotsOf('p4');
+const snitchSince = Date.now();
 await pages[2].evaluate(async () => { await beginSnitch(); });
 await host.waitForTimeout(600);
 await pages[2].evaluate(() => snitchOn('p4'));
 // Betrayal is a ping like any other now: a dot lands on the sold-out hider,
-// and the seeker holding the mark is told to go and look.
-const snitchDot = await until(host, ([id, n]) => (playersState[id].pings || []).length > n,
-  ['p4', dotsBeforeSnitch]);
-check('snitch puts a dot on the sold-out hider', snitchDot === true,
-  `${await dotsOf('p4')} dot(s), was ${dotsBeforeSnitch}`);
+// and the seeker holding the mark is told to go and look. Counted by
+// timestamp — only the last dozen dots are kept, so a full trail stops
+// getting any longer.
+const snitchDot = await until(host, ([id, since]) =>
+  (playersState[id].pings || []).some((d) => d.at > since), ['p4', snitchSince]);
+check('snitch puts a dot on the sold-out hider', snitchDot === true);
 const seekerGotReport = await until(host, async () => {
   const snap = await gameRef().collection('events').get();
   let found = false;

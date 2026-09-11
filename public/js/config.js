@@ -72,6 +72,11 @@ const CONFIG = {
     // else. Cheap enough to use as the opener before a Probe.
     scan: { cost: 15, displayMs: 25000 },
     tripwire: { cost: 5, triggerRadiusM: 20 },
+    // Passive, free, and mechanically inert on purpose: inside this radius a
+    // hider is told, in enormous letters, that they may no longer run. The
+    // app does not and cannot enforce it — the players do. It gives the
+    // seeker nothing at all, which is what keeps it out of the ping economy.
+    i_see_you: { radiusM: 20 },
     lockout: { cost: 25, durationMs: 3 * 60000 },
     totem: { cost: 60, maxUndeployed: 2, maxLive: 10 },
   },
@@ -102,9 +107,11 @@ const CONFIG = {
   hunt: {
     noCaptureCooldownMs: 10 * 60000,
     durationMs: 10 * 60000,
-    bearingRefreshMs: 30000,
-    coneDegAt500m: 40,
-    coneDegAt100m: 10,
+    // A hunt no longer hands out a bearing cone. It pings the hunted hider on
+    // this interval instead, starting the moment it is declared — so a hunt
+    // is worth four readings over its ten minutes, and every one of them is
+    // an ordinary ping that Go quiet and Decoy can answer.
+    pingIntervalMs: 3 * 60000,
   },
 
   signposts: {
@@ -198,7 +205,7 @@ function applyGameMode(mode) {
 
   CONFIG.hunt.noCaptureCooldownMs = shorter(CONFIG.hunt.noCaptureCooldownMs);
   CONFIG.hunt.durationMs = shorter(CONFIG.hunt.durationMs);
-  CONFIG.hunt.bearingRefreshMs = shorter(CONFIG.hunt.bearingRefreshMs);
+  CONFIG.hunt.pingIntervalMs = shorter(CONFIG.hunt.pingIntervalMs);
 
   CONFIG.boundary.breachTimerMs = shorter(CONFIG.boundary.breachTimerMs);
 

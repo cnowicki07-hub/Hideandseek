@@ -144,14 +144,16 @@ backend works. `living-room.mjs` runs a browser with **no geolocation
 permission granted at all**, which is the point: the indoor game has to work
 on a device with no usable GPS.
 
-The outdoor suite drives a full five-player game and asserts 111 rules:
+The outdoor suite drives a full five-player game and asserts 123 rules:
 that nothing pings on its own, the Probe's half-world sweep and the 30m
 error on what it reports, dot colour across its ten-minute life, that the
 map carries no label of any kind except a panic alert, every power's effect
 as seen from the *other* player's client, totem scaling and sabotage
-accrual/decay, hunt bearings, snitch fidelity bands, signpost discovery,
-hand-assigned roles, daylight mode, boundary breach exposure, capture,
-scoring, and that two concurrent transactions can't lose an update.
+accrual/decay, hunt readings and the two powers that answer them, snitch
+fidelity bands, signpost discovery,
+hand-assigned roles, daylight mode, I SEE YOU appearing at 20m and letting
+every tap through, boundary breach exposure, capture, scoring, and that two
+concurrent transactions can't lose an update.
 
 It also drives the two things outdoor testing broke: an uninvited player
 arriving by QR code — who has to stop and give a name, and cannot get back
@@ -215,6 +217,23 @@ slows down at once.
 | Lockout | 25 | One hider can use no power at all for 3 minutes. |
 | Probe | 30 | Tap the map: a wave sweeps that whole **180°** half of the world, out to the boundary, putting a dot on everyone it passes. Two of them cover everything, which is why it costs what it does. |
 | Totem | 60 | A permanent watchtower. Any hider inside is reported anonymously and exactly. Two hiders standing at it can destroy it. |
+| **I SEE YOU** | — | Passive, always on. See below. |
+
+**I SEE YOU** is not bought and not activated. Any hider who comes within
+**20m** of a seeker gets the words across their entire screen, dripping and
+blinking, over everything — and from that moment **they are not allowed to
+run**. Only walk, until they are clear.
+
+The app does not enforce it and cannot: the overlay is inert, passes every tap
+straight through, and the hider can read the map and spend powers exactly as
+before. It is a rule about a person's legs, kept by that person, and the
+screen is only there to make it impossible to pretend they didn't know. It
+reports *nothing* to the seeker — a free passive reading would break the rule
+that every dot on the map was paid for. What it buys the seeker is simply
+this: once they are close, nobody sprints away from them.
+
+The panic button deliberately sits above it in the stacking order. Atmosphere
+never covers the safety equipment.
 
 **Hiders** — everyone gets all four; there is nothing to pick.
 
@@ -227,6 +246,24 @@ slows down at once.
 
 Plus **Snitch** (20), which only unlocks while you are being hunted: sell out
 another hider to the seeker chasing you. They are never told it was you.
+
+**The Hunt** costs no charge at all — it is gated on the game going ten
+minutes without a capture, and it is the answer to a stalemate rather than a
+power. A seeker declares it on one hider, and for the next ten minutes that
+hider's position is reported every three minutes: four readings, free, the
+first one immediately.
+
+Those readings are **ordinary pings**. They carry the same 30m error as
+anything else, and more importantly **Go quiet and Decoy both work on them** —
+go quiet eats one outright, a decoy poisons the whole run. That is the point
+of the mechanic: a hunt is the moment a hider most needs their two defensive
+powers, so it must be the moment they work. The hunted player is told a hunt
+has started and their banner counts down to each reading, which turns spending
+a power into a decision with a clock on it rather than a guess.
+
+It reports nothing back to the hider about where the seeker is. An earlier
+version handed both sides a bearing cone computed from true positions, which
+looked like a chase and was really just a rule no hider power could touch.
 
 ## What a dot means
 
