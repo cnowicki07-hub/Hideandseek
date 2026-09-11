@@ -540,6 +540,156 @@ SCENARIOS.geometry = async () => {
 };
 
 // ---------------------------------------------------------------
+// 8. Solo
+//
+// The living-room game with nobody else in the room. The thing worth
+// watching is fairness: a bot is driven by the one client that is open, and
+// that client is holding every true position in memory. It must not use
+// them.
+// ---------------------------------------------------------------
+async function soloGameUp(role, bots) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  const p = await ctx.newPage();
+  p.on('pageerror', (e) => errors.push(e.message));
+  p.on('dialog', (d) => d.dismiss().catch(() => {}));
+  await p.addInitScript(() => { try { localStorage.setItem('h_seen_help', '1'); } catch (e) {} });
+  // No geolocation permission at all — solo is indoors, like living room.
+  await p.goto(`${ORIGIN}/?${STORE}pid=solo${Math.random().toString(36).slice(2, 6)}`);
+  await p.fill('#input-name-host', 'You');
+  await p.selectOption('#input-mode', 'solo');
+  await p.dispatchEvent('#input-mode', 'change');
+  await p.selectOption('#input-solo-role', role);
+  await p.fill('#input-solo-bots', String(bots));
+  await p.click('#btn-host');
+  await p.waitForSelector('#view-lobby.active', { timeout: 20000 });
+  return { ctx, p, errors };
+}
+
+SCENARIOS.solo = async () => {
+  const errors = [];
+  const { ctx, p, errors: e1 } = await soloGameUp('hider', 4);
+  errors.push(...e1);
+
+  const lobby = await p.evaluate(() => ({
+    solo: gameState.solo,
+    mode: gameState.mode,
+    roles: Object.values(playersState).map((x) => x.role).sort().join(','),
+    bots: Object.values(playersState).filter((x) => x.isBot).length,
+    qr: document.getElementById('qr-holder').closest('.card').style.display,
+    canStart: !document.getElementById('btn-start-game').disabled,
+  }));
+  if (lobby.mode !== 'livingroom' || !lobby.solo) {
+    finding('bug', 'solo is not the living-room game underneath',
+      `mode ${lobby.mode}, solo ${lobby.solo}`);
+  } else if (!lobby.canStart || lobby.bots !== 4) {
+    finding('bug', 'a solo game is not ready to start on its own',
+      `${lobby.bots} bots, start ${lobby.canStart ? 'enabled' : 'disabled'}`);
+  } else {
+    ok('solo sets itself up with nothing to wait for',
+      `${lobby.bots} opponents, roles ${lobby.roles}, QR hidden`);
+  }
+
+  await p.click('#btn-start-game');
+  await p.waitForSelector('#view-game.active', { timeout: 20000 });
+  await p.waitForTimeout(1500);
+  await p.evaluate(() => declareHidden());
+  await until(p, () => gameState.status === 'active', null, 30000);
+
+  // Bots must not act before the seekers are released — they are driven from
+  // this client, so none of the usual gates apply to them automatically.
+  const early = await p.evaluate(() => Object.values(playersState)
+    .filter((x) => x.isBot).reduce((a, x) => a + (x.pings || []).length, 0));
+
+  // Let it play.
+  let caught = 0;
+  for (let r = 0; r < 12; r++) {
+    await p.waitForTimeout(2500);
+    const s = await p.evaluate(() => ({
+      status: gameState.status,
+      moved: Object.values(playersState).filter((x) => x.isBot && x.realLat != null).length,
+      spent: Object.values(playersState).filter((x) => x.isBot && currentCharge(x) < 99).length,
+      dots: Object.values(playersState).reduce((a, x) => a + (x.pings || []).length, 0),
+      mine: (me().pings || []).length,
+      converted: Object.values(playersState).filter((x) => x.convertedAt).length,
+      stale: Object.values(playersState).filter((x) => x.isBot && playerUnavailable(x)).length,
+    }));
+    caught = s.converted;
+    if (s.status === 'ended') break;
+  }
+  const final = await p.evaluate(() => ({
+    moved: Object.values(playersState).filter((x) => x.isBot && x.realLat != null).length,
+    spent: Object.values(playersState).filter((x) => x.isBot && currentCharge(x) < 99).length,
+    dots: Object.values(playersState).reduce((a, x) => a + (x.pings || []).length, 0),
+    stale: Object.values(playersState).filter((x) => x.isBot && playerUnavailable(x)).length,
+    tracks: Object.values(playersState).filter((x) => x.isBot && (x.track || []).length > 1).length,
+  }));
+
+  if (final.moved < 4) {
+    finding('bug', 'some bots never moved', `${final.moved} of 4 have a position`);
+  } else if (!final.spent) {
+    finding('bug', 'no bot ever spent any charge', 'they are standing about doing nothing');
+  } else if (final.stale) {
+    finding('bug', 'bots are being treated as phones that went dark',
+      `${final.stale} would be greyed out — they need a heartbeat`);
+  } else {
+    ok('bots walk, spend and stay in contact',
+      `${final.moved} moving, ${final.spent} have spent, ${final.dots} dots on the map, `
+      + `${final.tracks} with a replay track`);
+  }
+  if (early > 0) {
+    finding('bug', 'bot seekers act during hiding time',
+      `${early} dots before the seekers were released — real seekers are held`);
+  } else {
+    ok('bot seekers are held at the start line like everyone else');
+  }
+  await ctx.close();
+
+  // And the other way round: the human seeking, with proximity capture.
+  const solo2 = await soloGameUp('seeker', 3);
+  errors.push(...solo2.errors);
+  await solo2.p.click('#btn-start-game');
+  await solo2.p.waitForSelector('#view-game.active', { timeout: 20000 });
+  await until(solo2.p, () => gameState.status === 'active', null, 40000);
+
+  const capture = await solo2.p.evaluate(() => {
+    const btn = document.getElementById('act-capture');
+    const before = { label: btn.textContent, disabled: btn.disabled, reach: captureInReach(Date.now()).length };
+    // Stand on top of somebody and see whether the game notices.
+    const victim = Object.entries(playersState).find(([, x]) => x.role === 'hider' && x.realLat);
+    window.__sim = window.__sim || {};
+    travelPos = { lat: victim[1].realLat, lng: victim[1].realLng };
+    myPos = { ...travelPos };
+    refreshHud();
+    return {
+      before,
+      after: { reach: captureInReach(Date.now()).length,
+        label: document.getElementById('act-capture').textContent },
+      victim: victim[0],
+    };
+  });
+  if (capture.before.reach !== 0 || capture.after.reach === 0) {
+    finding('bug', 'proximity capture does not track who is actually in reach',
+      `${capture.before.reach} at range, ${capture.after.reach} standing on them`);
+  } else {
+    ok('the human seeker can only take somebody they have reached',
+      `"${capture.before.label}" at range, "${capture.after.label}" up close`);
+  }
+  const took = await solo2.p.evaluate(async ([id]) => {
+    await confirmCapture(id);
+    await new Promise((r) => setTimeout(r, 500));
+    return playersState[id].role;
+  }, [capture.victim]);
+  if (took !== 'seeker') {
+    finding('bug', 'catching a bot does not convert it', `role is ${took}`);
+  } else {
+    ok('a caught bot changes sides like anybody else');
+  }
+  await solo2.ctx.close();
+  return errors;
+};
+
+// ---------------------------------------------------------------
 
 const names = only ? [only] : Object.keys(SCENARIOS);
 const allErrors = [];

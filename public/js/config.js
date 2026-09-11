@@ -258,6 +258,38 @@ const CONFIG = {
     maxPoints: 400,   // 400 x 15s is over 90 minutes of walking
   },
 
+  // ---------------------------------------------------------------
+  // Solo
+  //
+  // The living-room game with nobody else in the room. The other players are
+  // run by the one client that is open, on the same documents and the same
+  // rules — a bot spends charge, gets pinged and can be caught exactly like
+  // anybody else, and knows only what the game would have told a person in
+  // its position.
+  //
+  // One rule has to change. Capture is normally a conversation: the hider
+  // reads out four letters. There is nobody to read them to, so indoors and
+  // alone it becomes proximity, which the tap-to-travel tokens are precise
+  // enough to make fair.
+  // ---------------------------------------------------------------
+  solo: {
+    captureRadiusM: 18,
+    // How often a bot thinks. Slower than the rules tick on purpose: a bot
+    // that reacts instantly to every ping reads as a cheat rather than an
+    // opponent.
+    thinkMs: 1600,
+    // A bot seeker will not spend its last charge; it keeps enough back to
+    // answer a lead when one appears.
+    seekerReserve: 10,
+    // How long a bot seeker trusts a dot before going back to sweeping.
+    leadTrustMs: 90000,
+    // A bot hider waits this long after being pinged before spending on
+    // cover, so it looks like a decision rather than a reflex.
+    reactMs: 2500,
+    maxBots: 7,
+    names: ['Wren', 'Ash', 'Fen', 'Mox', 'Pike', 'Juno', 'Rook'],
+  },
+
   // Bravado. Costs no charge, because charge buys information and this buys
   // nothing — it is a firework, it lasts five seconds, and it leaves nothing
   // behind. The cooldown is the only limiter, and it exists so a taunt stays

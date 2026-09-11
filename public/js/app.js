@@ -86,6 +86,7 @@ async function hostCreateGame(opts) {
   await gameRef().set({
     status: 'lobby',
     mode: opts.mode || 'outdoor',
+    solo: !!opts.solo,
     areaM2, M,
     boundary,
     gameLengthMin: lengthMin,
@@ -417,6 +418,23 @@ function tickBreachExposure(p, now) {
 // No target selection in the UI — capture in real life happens because
 // the seeker can already see/identify the hider. The app's only job is
 // to verify the 4-letter code they're handed and convert that player.
+
+// Solo has nobody to read four letters to, so being caught is being reached.
+// Tokens indoors are precise, unlike GPS, which is what makes this fair —
+// and it is the only rule the mode changes.
+function captureInReach(now) {
+  const p = me();
+  if (!soloGame() || !p || !myPos) return [];
+  const wantRole = p.role === 'seeker' ? 'hider' : null;
+  if (!wantRole) return [];
+  return Object.entries(playersState)
+    .filter(([id, x]) => id !== playerId && x.role === wantRole
+      && x.status === 'active' && x.realLat != null
+      && distanceM(myPos, { lat: x.realLat, lng: x.realLng }) <= CONFIG.solo.captureRadiusM)
+    .map(([id, x]) => ({
+      id, label: `${x.name} — ${Math.round(distanceM(myPos, { lat: x.realLat, lng: x.realLng }))}m`,
+    }));
+}
 
 async function lookupCaptureTarget(enteredCode) {
   const snap = await gameRef().collection('players')
@@ -1049,6 +1067,9 @@ function tick() {
   tickPingDebt(p, now);
   tickHunt(p, now);
   if (conductorId(now) === playerId) tickConductorChecks(now);
+  // Solo: this is the only client there is, so it walks and thinks for
+  // everybody else as well.
+  if (soloGame()) { botsAreHere(now); safely('bots', () => tickBots(now)); }
 
   refreshHud();
   renderWorld();

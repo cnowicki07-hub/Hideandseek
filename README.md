@@ -78,6 +78,34 @@ values `applyGameMode` explicitly overrides — that list is right there in
 which numbers indoors reinterprets. So the living-room game is a genuine
 rehearsal for the outdoor one, not an approximation of it.
 
+**Solo** — the living-room game with nobody else in the room. Chosen the same
+way when hosting; you pick your side and how many opponents, and there is
+nothing to wait for.
+
+The others are ordinary players. They have documents, charge, capture codes,
+trails and scores like anyone else; what they do not have is a phone, so the
+one client that is open walks their tokens and spends their charge. The thing
+that mattered most building it was that **a bot must not cheat**, and the
+temptation is everywhere, because that client is holding every true position
+in memory. So a bot seeker reads exactly what a real seeker reads — the dots
+on a hider's document, which somebody had to pay for — and only looks at a
+true position once it is close enough that a person would have line of sight.
+A bot hider knows only that it has been pinged, because that is all the game
+tells a hider.
+
+One rule changes: there is nobody to read four letters to, so **catching is
+reaching** — get within 20m and the Catch button lights up. Tokens indoors
+are exact, unlike GPS, which is what makes that fair.
+
+Two things came out of playing it rather than writing it. Bot seekers were
+probing all through the head start, because driving them from this client
+means none of `powerBlockedReason`'s gates apply to them automatically — the
+ones that matter are now stated explicitly. And bot hiders fled 200m on every
+single ping, which made a seeker's last thirty metres impossible to close; a
+bot that reacts perfectly is not an opponent, it is a wall. They sit tight
+about half the time on a first reading now, and only really run when pinged
+twice in quick succession, which is roughly what a person does.
+
 ## 1. Run it locally
 
 ```

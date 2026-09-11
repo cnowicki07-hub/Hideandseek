@@ -100,13 +100,20 @@ function renderLocationStatus() {
 }
 
 el('input-mode').onchange = () => {
-  const indoors = el('input-mode').value === 'livingroom';
-  el('mode-note').textContent = indoors
-    ? 'Played sitting together. Tap the map to send your token somewhere and it walks there — ' +
-      'GPS cannot work indoors, so travel happens on screen. One round is about 10 minutes.'
-    : 'Played on foot across a real area you draw on the map.';
-  el('input-area-side').parentElement.style.opacity = indoors ? 0.4 : 1;
-  el('input-length').parentElement.style.opacity = indoors ? 0.4 : 1;
+  const mode = el('input-mode').value;
+  const onScreen = mode !== 'outdoor';
+  const solo = mode === 'solo';
+  el('mode-note').textContent = solo
+    ? 'The living-room game with nobody else in the room. The others are run by '
+      + 'this phone, on the same rules — they spend charge, they get pinged, and '
+      + 'they only know what the game would have told them.'
+    : onScreen
+      ? 'Played sitting together. Tap the map to send your token somewhere and it walks there — '
+        + 'GPS cannot work indoors, so travel happens on screen. One round is about 10 minutes.'
+      : 'Played on foot across a real area you draw on the map.';
+  el('solo-setup').style.display = solo ? 'block' : 'none';
+  el('input-area-side').parentElement.style.opacity = onScreen ? 0.4 : 1;
+  el('input-length').parentElement.style.opacity = onScreen ? 0.4 : 1;
 };
 
 el('btn-retry-location').onclick = async () => {
@@ -361,13 +368,22 @@ el('btn-host').onclick = async () => {
     gameLengthMin: lengthMin,
     endConditionMode: el('input-end-mode').value,
   };
-  if (mode === 'livingroom') {
+  // Solo is the living-room game underneath — same tap-to-travel, same
+  // compressed clock, same everything. What it adds is the other players.
+  if (mode !== 'outdoor') {
     const centre = myPos || { lat: 51.5074, lng: -0.1278 };
+    opts.mode = 'livingroom';
+    opts.solo = mode === 'solo';
     opts.boundary = squareBoundaryAround(centre, LIVING_ROOM.defaultAreaSideM);
     opts.gameLengthMin = LIVING_ROOM.gameLengthMin;
   }
   try {
     await hostCreateGame(opts);
+    if (mode === 'solo') {
+      await spawnBots(
+        parseInt(el('input-solo-bots').value, 10) || 4,
+        el('input-solo-role').value);
+    }
   } catch (e) { storeConnectionFailed(e); return; }
   el('lobby-code').textContent = gameCode;
   showView('view-lobby');
@@ -570,8 +586,9 @@ function renderLobbyList(players) {
     li.appendChild(btn);
 
     // The host cannot kick themselves — there would be nobody left holding
-    // the controls.
-    if (id !== playerId) {
+    // the controls — and in solo there is nobody to remove: the opponents
+    // are the game.
+    if (id !== playerId && !soloGame()) {
       const kick = document.createElement('button');
       kick.className = 'kick-btn secondary';
       kick.textContent = '✕';
@@ -596,7 +613,19 @@ function renderLobby(players) {
   const p = players[playerId];
   if (!p) return;
   renderLobbyList(players);
-  renderJoinQr();
+  // Solo: there is nobody to invite and nothing to assign — the roles were
+  // settled when the game was made. Everything to do with other people goes.
+  const solo = soloGame();
+  const qrCard = el('qr-holder').closest('.card');
+  if (qrCard) qrCard.style.display = solo ? 'none' : 'block';
+  const rolesCard = el('btn-assign-roles').closest('.card');
+  if (rolesCard) rolesCard.style.display = solo ? 'none' : 'block';
+  el('lobby-code').parentElement.style.display = solo ? 'none' : 'block';
+  el('lobby-code').parentElement.nextElementSibling.style.display = solo ? 'none' : 'block';
+  const startCard = el('btn-start-game').closest('.card');
+  const startTitle = startCard && startCard.querySelector('h2');
+  if (startTitle) startTitle.textContent = solo ? 'Start' : '2. Start';
+  if (!solo) renderJoinQr();
   renderLocationStatus();
   maybeShowFirstRunHelp();
 
@@ -908,7 +937,7 @@ function buildActionButtons() {
   };
 
   if (p.role === 'seeker') {
-    add('act-capture', 'Capture', openCaptureModal, 'primary');
+    add('act-capture', 'Capture', soloGame() ? openSoloCapture : openCaptureModal, 'primary');
     add('act-hunt', 'Hunt', openHuntPicker);
   }
   if (p.role === 'hider') {
@@ -922,7 +951,17 @@ function buildActionButtons() {
 
 function refreshActionButtons(p, now) {
   const capture = el('act-capture');
-  if (capture) capture.disabled = isHiding();
+  if (capture) {
+    capture.disabled = isHiding();
+    if (soloGame()) {
+      const reach = captureInReach(now);
+      capture.disabled = isHiding() || !reach.length;
+      capture.textContent = reach.length ? `Catch (${reach.length})` : 'Catch';
+      capture.title = reach.length
+        ? 'Somebody is close enough to take.'
+        : `Get within ${CONFIG.solo.captureRadiusM}m of a hider.`;
+    }
+  }
 
   const hunt = el('act-hunt');
   if (hunt) {
@@ -950,6 +989,19 @@ function refreshActionButtons(p, now) {
     taunt.disabled = !!reason;
     taunt.title = reason || 'Set off a firework. Costs nothing, tells them nothing.';
   }
+}
+
+// Nobody to read four letters to, so being caught is being reached.
+function openSoloCapture() {
+  const reach = captureInReach(Date.now());
+  if (!reach.length) {
+    toast(`Get within ${CONFIG.solo.captureRadiusM}m of a hider first.`);
+    return;
+  }
+  beginPlayerTargeting('Catch', reach, async (id) => {
+    const r = await confirmCapture(id);
+    if (r && r.ok !== false) toast(`Caught ${playersState[id].name}.`);
+  });
 }
 
 // ---------- targeting ----------
@@ -1797,6 +1849,17 @@ function howToPlayHtml(role) {
        own at about 15 a minute, and there is a cooldown after each use, so you
        cannot chain them. You have your whole side's set — there is nothing to
        choose in advance. Tap and hold a power to read what it does.</p>
+
+    <h4>On your own</h4>
+    <p>Solo is this same game with nobody else in the room. The others are run
+       by your phone, on the same rules: they spend charge, they get pinged,
+       they can be caught, and they only know what the game would have told a
+       person in their position. A bot seeker is reading the same dots you
+       would be, which somebody had to pay for.</p>
+    <p>One rule changes, because there is nobody to read four letters to.
+       <strong>Catching is reaching</strong> — get within
+       20m or so and the Catch button lights up. Tokens indoors are exact,
+       unlike GPS, which is what makes that fair.</p>
 
     <h4>Reading the map</h4>
     <p>Tap <strong>KEY</strong> on the right of the map for what every colour

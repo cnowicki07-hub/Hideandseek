@@ -522,13 +522,20 @@ const offsets = await host.evaluate(() => {
 check(`reported positions are wrong by up to ~${JITTER}m`,
   offsets.length === 1 && offsets[0] > 0 && offsets[0] <= JITTER_MAX, `${offsets[0]}m off true position`);
 
-await runPower(1, 'probe', { point: off(0, 400) });
-await host.waitForTimeout(900);
-const drift = await host.evaluate(() => {
+// Wait for the second dot to actually land rather than guessing at a delay —
+// over a real Durable Object 900ms is not always enough, and comparing a dot
+// against itself reports no drift at all.
+const firstDotAt = await host.evaluate(() => {
   const d = playersState.p2.pings;
-  return Math.round(distanceM(d[d.length - 2], d[d.length - 1]));
+  return d[d.length - 1].at;
 });
-check('a motionless player appears to move between pings', drift > 0,
+await runPower(1, 'probe', { point: off(0, 400) });
+const drift = await until(host, ([since]) => {
+  const d = playersState.p2.pings || [];
+  if (d.length < 2 || d[d.length - 1].at <= since) return false;
+  return Math.round(distanceM(d[d.length - 2], d[d.length - 1])) || 0.4;
+}, [firstDotAt], 15000);
+check('a motionless player appears to move between pings', drift > 0 && drift !== 0.4,
   `${drift}m of apparent movement while standing still`);
 
 // -- Nothing on the map is labelled --
