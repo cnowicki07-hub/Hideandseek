@@ -152,9 +152,19 @@ button.danger {
 }
 /* For the host every row is a role control, so the row itself is the button
    and the list keeps its own padding out of the way. */
-#lobby-players li.row-pick { padding: 0; border-left: none; background: none; }
+#lobby-players li.row-pick {
+  padding: 0; border-left: none; background: none;
+  display: flex; gap: 5px; align-items: stretch;
+}
+.kick-btn {
+  width: 44px; flex: 0 0 44px; margin: 0; padding: 0;
+  font-size: 15px; letter-spacing: 0; line-height: 1;
+  color: var(--bone-dim);
+}
+.kick-btn:hover { color: var(--blood-lit); border-color: var(--edge-lit); }
 .role-pick {
-  display: flex; width: 100%; align-items: center; justify-content: space-between;
+  display: flex; flex: 1 1 auto; min-width: 0;
+  align-items: center; justify-content: space-between;
   gap: 10px; margin: 0; padding: 11px 12px; font-size: 14px; text-align: left;
   border-left: 2px solid var(--blood-dim);
 }
@@ -276,6 +286,58 @@ button.danger {
   box-shadow: 0 2px 10px rgba(0,0,0,0.8); z-index: 900;
 }
 .locate-fab:active { background: #1d1016; }
+.daylight-fab { bottom: 252px; font-size: 18px; }
+
+/* ---------- daylight mode ----------
+   A legibility mode, not a second theme. Same palette and the same identity;
+   what changes is luminance. The grain and vignette come off, the surfaces
+   lift far enough to read in direct sun, and the map is left at its real
+   colours instead of being inverted into night. Applied per player, because
+   one of them is in a wood and another is in an open field. */
+
+body.daylight { background: #262029; }
+body.daylight::after { opacity: 0.12; }
+
+body.daylight {
+  --void:      #262029;
+  --pitch:     #2f2830;
+  --panel:     #3b323c;
+  --panel-2:   #4a3f4b;
+  --edge:      #6b5560;
+  --edge-lit:  #9c4451;
+
+  --blood:     #c81019;
+  --blood-lit: #ff3d47;
+  --blood-dim: #8e0b13;
+
+  --bone:      #fdfaf6;
+  --bone-dim:  #cfc4bd;
+  --rot:       #c3dda6;
+  --amber:     #ffcd6b;
+}
+
+/* The map is the whole point: leave the tiles as OpenStreetMap drew them,
+   with a touch of contrast rather than an inversion into night. */
+body.daylight .leaflet-tile { filter: contrast(1.06) saturate(0.95); }
+
+/* Screen blending disappears against a bright map, so the scan glow darkens
+   the edge instead of lighting it. */
+body.daylight .scan-wedge { mix-blend-mode: multiply; opacity: 0.62; }
+
+body.daylight #hud { background: linear-gradient(180deg, #3a2b30 0%, #241b1f 100%); }
+body.daylight .banner.info   { background: #23343a; color: #d3ecf6; }
+body.daylight .banner.warn   { background: #3d3116; color: #ffdf9b; }
+body.daylight .banner.danger { background: #48141a; color: #ffd3d5; }
+body.daylight #hiding-bar, body.daylight #action-bar { background: #2b232c; }
+@keyframes pulse-danger-day {
+  0%, 100% { background: #48141a; }
+  50%      { background: #5e1b23; }
+}
+body.daylight .banner.danger { animation-name: pulse-danger-day; }
+
+/* The flicker is atmosphere. In bright sun it just makes headings hard to
+   read, so it stops. */
+body.daylight h1 { animation: none; }
 
 /* Safety equipment, deliberately NOT game furniture.
    No horror styling, no serif, no glow, no pulse — it should read as the

@@ -27,9 +27,10 @@ differently priced. What replaced them is described under
 [What a dot means](#what-a-dot-means). Everything else — totems, sabotage,
 hunts, snitching, capture, scoring — is as specified.
 
-**Not done: outdoor testing on real phones.** See
-[Before Friday](#before-friday) — this is the remaining risk, and it is
-not something that could be checked from here.
+Everything the first outdoor test threw up is fixed — see `BACKLOG.md` for
+what those were. **What still has not been done is a second outdoor test.**
+See [Before Friday](#before-friday): the suite covers the rules, it cannot
+cover GPS or sunlight, and that is the remaining risk.
 
 ## Stack
 
@@ -143,15 +144,20 @@ backend works. `living-room.mjs` runs a browser with **no geolocation
 permission granted at all**, which is the point: the indoor game has to work
 on a device with no usable GPS.
 
-The outdoor suite drives a full five-player game and asserts 97 rules:
+The outdoor suite drives a full five-player game and asserts 111 rules:
 that nothing pings on its own, the Probe's half-world sweep and the 30m
 error on what it reports, dot colour across its ten-minute life, that the
 map carries no label of any kind except a panic alert, every power's effect
 as seen from the *other* player's client, totem scaling and sabotage
 accrual/decay, hunt bearings, snitch fidelity bands, signpost discovery,
-hand-assigned roles, boundary breach exposure, capture, scoring, and that
-two concurrent transactions can't lose an update. Worth re-running after any
-change to `public/js/config.js`.
+hand-assigned roles, daylight mode, boundary breach exposure, capture,
+scoring, and that two concurrent transactions can't lose an update.
+
+It also drives the two things outdoor testing broke: an uninvited player
+arriving by QR code — who has to stop and give a name, and cannot get back
+in once the host removes them — and a removed player disappearing from the
+lobby's arithmetic instead of holding the Start button down. Worth
+re-running after any change to `public/js/config.js`.
 
 ## 2. Deploy
 
@@ -164,17 +170,28 @@ prints the URL everyone opens. `wrangler login` first if you haven't.
 
 ## Running a game
 
+0. Everyone standing in bright sun should tap **Daylight mode** on the first
+   screen. See [Daylight mode](#daylight-mode).
 1. Host fills in a name and taps **Host Game**.
 2. In the lobby the host **draws the boundary** by tapping corners on the
    map. This is worth doing properly: the area sets `M`, and every
    distance rule (totem radius, sabotage time, uncertainty cap, head
    start) scales from it. The lobby shows those numbers as you draw.
-3. Everyone else joins with the code, or scans the QR in the lobby.
+3. Everyone else joins with the code, or scans the QR in the lobby. A scanned
+   link fills the form in and stops — you still type your name and tap
+   **Join Game**, which is also where the location prompt comes from. A blank
+   name is refused: the seekers have to be able to say it out loud.
 4. Host sets the roles: **tap any player in the lobby list** to cycle them
    through no role → seeker → hider, or set a seeker count and tap
    **Assign Roles Randomly**. Both sides have to exist before the game will
    start. There is nothing else to pick — everyone gets their whole side's
    powers.
+
+   The **✕** beside each row removes that player. Anyone who has the code can
+   join, and in a real game a stranger did; a removed player is told what
+   happened, taken back to the start, and the same code will not get them
+   back in. The host menu carries the same control mid-game, for a stranger
+   nobody spots until later.
 5. That starts **hiding time**, not the hunt. Seekers are held; hiders walk
    out and tap **I'm hidden** when they're happy. Once everyone has
    declared — or the head start runs out — the seekers are released.
@@ -238,6 +255,21 @@ trails are never jittered either.
 One thing still pings for free: **leaving the boundary**. Step outside and the
 game gives your position away over and over until you come back, and nothing
 you can buy will stop it.
+
+## Daylight mode
+
+The horror theme is right at dusk and wrong at noon — the first outdoor test
+was people in a bright field squinting at a map the CSS deliberately inverts
+into night. **Daylight mode** is a legibility mode, not a second theme: same
+palette and the same identity, but the grain and vignette come off, the
+surfaces lift far enough to read in direct sun, and the map is left at
+OpenStreetMap's real colours instead of being inverted. Every dot gains a dark
+ring, because a white dot on a pale tile is no dot at all.
+
+It is **per player**, not per game — one of them is under trees and another is
+in an open field — and it is remembered, so it survives the reload between
+rounds. Set it from the landing screen before you start, or the **☀** button
+on the map at any time.
 
 ## Signposts
 
@@ -304,6 +336,9 @@ outdoors, on real phones, before the real game:
       the one that depends on real GPS precision, and if 10m proves too
       tight in practice, raise `baseAccuracyRadiusM` in `public/js/config.js`
       (it widens the sabotage ring with it)
+- [ ] Daylight mode on, in actual sun, checking the dots still read against
+      undarkened tiles — the ring was added for exactly this and has only
+      been checked on a desk
 
 ## What the port to Cloudflare changed
 

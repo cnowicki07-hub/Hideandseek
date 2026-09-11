@@ -14,7 +14,10 @@
   <h1>Come out<br>come out<br>wherever you are</h1>
   <p class="tagline">Hide &amp; Seek</p>
 
-  <button id="btn-how-landing" class="secondary">How to play</button>
+  <div class="row">
+    <button id="btn-how-landing" class="secondary">How to play</button>
+    <button id="btn-daylight-landing" class="secondary">Daylight mode</button>
+  </div>
 
   <div class="card">
     <h2>Host a game</h2>
@@ -39,6 +42,7 @@
 
   <div class="card">
     <h2>Join a game</h2>
+    <p class="prompt" id="join-prompt" style="display:none"></p>
     <input id="input-name-join" placeholder="Your name">
     <input id="input-code" placeholder="Game code" autocapitalize="characters">
     <button id="btn-join">Join Game</button>
@@ -130,6 +134,7 @@
     <div id="action-buttons"></div>
   </div>
 
+  <button id="btn-daylight" class="locate-fab daylight-fab" title="Brighten the screen for daylight">☀</button>
   <button id="btn-locate" class="locate-fab" title="Centre the map on me">◎</button>
   <button id="btn-panic" class="safety-btn" title="Emergency — alerts everyone and ends your game">
     <span class="safety-icon">✚</span><span class="safety-label">Help</span>

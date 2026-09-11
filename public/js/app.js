@@ -113,6 +113,13 @@ async function joinGame(code, name, isHost) {
   rememberName(name);
 
   const existing = await playerRef().get();
+  if (existing.exists && existing.data().status === 'kicked') {
+    // Rejoining with the same code is otherwise trivial, which would make the
+    // kick pointless. It only holds against this browser, but that is the
+    // same thing the game code is worth — enough for an uninvited stranger.
+    alert('The host removed you from this game.');
+    return false;
+  }
   if (existing.exists) {
     // Reconnect: keep role, charge, marks, survival timer (design doc 2.2).
     await playerRef().update({ name, lastContactAt: Date.now() });
@@ -450,9 +457,32 @@ async function setPlayerRole(id, role) {
   await playerRef(id).update({ role: role || null });
 }
 
+// Anyone who has the code is in, so a game played in public can pick up a
+// stranger — it did, outdoors. The host can remove them. A kicked player is
+// told what happened rather than silently losing their game, and every rule
+// already keys off status === 'active', so removing them mid-game drops them
+// out of pings, sabotage, hunts and scoring the same way quitting does.
+async function kickPlayer(id) {
+  if (id === playerId) return false;
+  const target = playersState[id];
+  if (!target || target.status === 'kicked') return false;
+
+  const now = Date.now();
+  await playerRef(id).update({
+    status: 'kicked',
+    endedAt: now,
+    survivalMs: target.role === 'hider' ? survivalMsFor(target, now) : null,
+    activePower: null, activePowerExpiresAt: 0, decoy: null, huntedBy: {},
+  });
+  await clearHuntsOn(id);
+  await pushEvent({ type: 'kicked', to: id });
+  return true;
+}
+
 async function assignRolesRandom(numSeekers) {
   const snap = await gameRef().collection('players').get();
-  const ids = snap.docs.map((d) => d.id);
+  // A removed player is not in the deal.
+  const ids = snap.docs.filter((d) => d.data().status !== 'kicked').map((d) => d.id);
   for (let i = ids.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [ids[i], ids[j]] = [ids[j], ids[i]];
@@ -661,6 +691,10 @@ function subscribeToPlayers() {
     const players = {};
     snap.forEach((doc) => { players[doc.id] = doc.data(); });
     playersState = players;
+    // Driven off the document rather than the event, so being kicked lands
+    // even if the event was missed — a reconnect, a backgrounded tab.
+    const mine = players[playerId];
+    if (mine && mine.status === 'kicked') { safely('kicked', handleBeingKicked); return; }
     safely('players', () => renderPlayers(players));
   });
 }
@@ -721,6 +755,17 @@ function handleEvents(evts) {
 function startTick() {
   if (tickTimer) return;
   tickTimer = setInterval(tick, CONFIG.tickMs);
+}
+
+// Used when a player is removed from a game: without this the client keeps
+// running the rules and writing positions into a game it is no longer in.
+function stopPlaying() {
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+  if (watchId && watchId !== -1 && navigator.geolocation) {
+    navigator.geolocation.clearWatch(watchId);
+  }
+  watchId = null;
+  stopTravel();
 }
 
 function tick() {

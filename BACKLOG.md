@@ -1,27 +1,7 @@
 # Backlog
 
-Things that came out of outdoor testing and are **not built yet**. Kept here
-so they don't get lost between sessions. Nothing in this file is implemented.
-
-## From the first outdoor test
-
-- **The QR skips the name step.** Scanning the join code takes a player
-  straight into the lobby without ever asking who they are, so they arrive as
-  a blank. The QR path needs the same name entry the manual path has, before
-  it joins.
-
-- **The host can't kick anyone.** A stranger joined a real game — the code was
-  visible, and anyone who has it is in. The host needs a kick control on each
-  row of the lobby list, and a kicked player needs to be told why they were
-  dropped rather than silently losing state.
-
-- **The UI is too dark outdoors.** In bright daylight the map especially is
-  hard to read: the horror theme darkens the tiles with a CSS filter, which is
-  right indoors and wrong in a field. Open questions before building it:
-  whether it's a host-wide setting or a per-player toggle (per-player, most
-  likely — the sun is where the player is), and whether "bright" should drop
-  the tile filter entirely or just lighten it. The dots need re-checking for
-  contrast against undarkened tiles either way.
+Everything from the first outdoor test is now built. What is left here is the
+one structural change that was never in scope for this build.
 
 ## Bigger, if this game gets played more than once
 
@@ -31,3 +11,26 @@ so they don't get lost between sessions. Nothing in this file is implemented.
   server now — `src/server.js` — so the authoritative checks could move into
   it. The build brief traded anti-cheat away deliberately; this is what
   un-trading it would look like.
+
+  The kick is worth noting as the first crack in that trade: it holds against
+  a stranger's browser, not against someone who clears their storage. That is
+  the right strength for the problem it was built for, and it is also a
+  reminder of where the line currently sits.
+
+## Done
+
+- ~~The QR skips the name step~~ — a scanned link now fills the form in and
+  stops; joining still goes through the button, so the name step and the
+  location prompt both happen. A blank name is refused outright rather than
+  becoming "Player".
+- ~~The host can't kick anyone~~ — every lobby row has a kick control, the
+  host menu carries one per active player mid-game, a removed player is told
+  and taken back to the start, and the same code will not get them back in.
+- ~~Roles can only be assigned randomly~~ — tap any lobby row to cycle a
+  player through no role → seeker → hider. Random assignment stays as the
+  shortcut, and the lobby refuses to start a one-sided game.
+- ~~The UI is too dark outdoors~~ — daylight mode, per player, from the
+  landing screen or the ☀ button on the map. Resolved the two open questions
+  as: per player (the sun is where the player is standing), and drop the tile
+  inversion entirely rather than lightening it. Dots get a dark ring in
+  daylight so a white one does not vanish into a pale tile.

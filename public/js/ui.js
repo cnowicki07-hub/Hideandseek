@@ -29,6 +29,7 @@ const MAP = {
   woodLit:    '#9a825a',
   violet:     '#8e5fa8',
   own:        '#4ade80',   // your own trail — green, so you can tell it apart
+  outline:    '#16060a',   // dark ring under a dot in daylight mode
 };
 
 let currentPlayerName = '';
@@ -134,6 +135,43 @@ function recenterOnSelf(lat, lng) {
 
 // The map follows you once, on the first fix, and then leaves you alone so
 // you can pan around. This is how you get back.
+// ---------- daylight ----------
+//
+// The horror theme is right at dusk and wrong at noon: outdoor testing put
+// people in a bright field squinting at tiles the CSS deliberately darkens.
+// Daylight mode is a legibility mode, not a second theme — same palette,
+// same identity, but the grain and vignette come off, the map is left at its
+// real colours, and every dot gets a dark outline so a white one does not
+// vanish into a pale tile.
+//
+// Per player, not per game: the sun is where the player is standing, and the
+// host being indoors says nothing about the rest of them. Kept in
+// localStorage so it survives the rematch reload.
+let daylightMode = false;
+function daylight() { return daylightMode; }
+
+function setDaylight(on) {
+  daylightMode = !!on;
+  document.body.classList.toggle('daylight', daylightMode);
+  const btn = el('btn-daylight');
+  if (btn) {
+    btn.textContent = daylightMode ? '☾' : '☀';
+    btn.title = daylightMode ? 'Back to the dark screen' : 'Brighten the screen for daylight';
+  }
+  const landing = el('btn-daylight-landing');
+  if (landing) landing.textContent = daylightMode ? 'Dark mode' : 'Daylight mode';
+  try { localStorage.setItem('h_daylight', daylightMode ? '1' : '0'); } catch (e) { /* private mode */ }
+  if (mapReady) renderWorld();
+}
+
+try { setDaylight(localStorage.getItem('h_daylight') === '1'); }
+catch (e) { setDaylight(false); }
+
+el('btn-daylight').onclick = () => setDaylight(!daylightMode);
+// Also settable before the game starts — the lobby is where people are
+// already standing in the sun, squinting at a QR code.
+el('btn-daylight-landing').onclick = () => setDaylight(!daylightMode);
+
 el('btn-locate').onclick = () => {
   if (!mapReady) return;
   if (!myPos) { toast('No GPS fix yet.'); return; }
@@ -171,7 +209,15 @@ el('btn-host').onclick = async () => {
 };
 
 el('btn-join').onclick = async () => {
-  currentPlayerName = el('input-name-join').value.trim() || 'Player';
+  // A blank name used to silently become "Player", which is how a scanned
+  // join produced a nameless player in a real game. Names are how capture
+  // works, so an unnamed player is not a player.
+  currentPlayerName = el('input-name-join').value.trim();
+  if (!currentPlayerName) {
+    alert('Put your name in first — the seekers have to be able to say it.');
+    el('input-name-join').focus();
+    return;
+  }
   const code = el('input-code').value.trim();
   if (!code) { alert('Enter a game code.'); return; }
   let ok;
@@ -318,6 +364,7 @@ function renderLobbyList(players) {
   const iAmHost = !!(players[playerId] && players[playerId].isHost);
   list.innerHTML = '';
   Object.entries(players).forEach(([id, p]) => {
+    if (p.status === 'kicked') return;
     const li = document.createElement('li');
     const label = `${p.name}${p.isHost ? ' (host)' : ''}`;
     const role = p.role ? p.role : 'no role';
@@ -339,6 +386,23 @@ function renderLobbyList(players) {
       try { await setPlayerRole(id, next); } finally { btn.disabled = false; }
     };
     li.appendChild(btn);
+
+    // The host cannot kick themselves — there would be nobody left holding
+    // the controls.
+    if (id !== playerId) {
+      const kick = document.createElement('button');
+      kick.className = 'kick-btn secondary';
+      kick.textContent = '✕';
+      kick.title = `Remove ${p.name} from the game`;
+      kick.setAttribute('aria-label', `Remove ${p.name} from the game`);
+      kick.onclick = async () => {
+        if (!confirm(`Remove ${p.name} from the game?`)) return;
+        kick.disabled = true;
+        try { await kickPlayer(id); toast(`${p.name} removed.`); }
+        finally { kick.disabled = false; }
+      };
+      li.appendChild(kick);
+    }
     list.appendChild(li);
   });
 }
@@ -396,7 +460,9 @@ function renderLobby(players) {
 }
 
 function renderHostLobbyStatus(players) {
-  const all = Object.values(players);
+  // Removed players are gone from the lobby's arithmetic entirely — otherwise
+  // a kicked stranger with no role would hold the Start button down forever.
+  const all = Object.values(players).filter((x) => x.status !== 'kicked');
   const assigned = all.filter((x) => x.role).length;
   const seekers = all.filter((x) => x.role === 'seeker').length;
   const hiders = all.filter((x) => x.role === 'hider').length;
@@ -845,6 +911,18 @@ function openMenu() {
     };
     if (isPaused()) mk('Resume game', resumeGame); else mk('Pause game', pauseGame);
     mk('End game now', async () => { if (confirm('End the game for everyone?')) await endGameNow(); });
+
+    // A stranger is not always spotted in the lobby, so the kick has to
+    // survive into the game itself.
+    Object.entries(playersState)
+      .filter(([id, x]) => id !== playerId && x.status === 'active')
+      .forEach(([id, x]) => {
+        mk(`Remove ${x.name}`, async () => {
+          if (!confirm(`Remove ${x.name} from the game?`)) return;
+          await kickPlayer(id);
+          toast(`${x.name} removed.`);
+        });
+      });
     const flagged = Object.values(playersState)
       .filter((x) => x.status === 'active' && offlineFlagged(x));
     if (flagged.length) {
@@ -877,11 +955,24 @@ function onGameEvent(e) {
     case 'hunt_cleared': toast('Your mark was cleared — they sabotaged a totem.'); break;
     case 'totem_destroyed': toast('A totem has been destroyed.'); break;
     case 'snitch_report': toast(`Someone sold out ${e.name}.`); break;
+    case 'kicked': handleBeingKicked(); break;
     case 'panic':
       showPanicAlert(e);
       break;
     default: break;
   }
+}
+
+// Being removed is the one state change that should stop the app dead: keep
+// ticking and the client would go on writing positions into a game it is no
+// longer part of. Said out loud, once, then back to the start.
+let kickHandled = false;
+function handleBeingKicked() {
+  if (kickHandled) return;
+  kickHandled = true;
+  stopPlaying();
+  showView('view-landing');
+  alert('The host has removed you from this game.');
 }
 
 let panicAlerts = [];
@@ -942,7 +1033,7 @@ function renderWorld() {
         if (!look) return;
         add(L.circleMarker([ping.lat, ping.lng], {
           radius: CONFIG.ping.dotRadiusPx,
-          color: look.color, fillColor: look.color,
+          color: daylight() ? MAP.outline : look.color, fillColor: look.color,
           fillOpacity: look.opacity * 0.8, opacity: look.opacity,
           weight: 2, dashArray: '2 3',
         }));
@@ -1073,13 +1164,17 @@ function renderTrails(p, now, add) {
     dots.forEach((dot) => {
       const look = pingAppearance(dot, now);
       if (!look) return;
+      const fill = isSelf ? MAP.own : look.color;
       add(L.circleMarker([dot.lat, dot.lng], {
         radius: CONFIG.ping.dotRadiusPx,
-        color: isSelf ? MAP.own : look.color,
-        fillColor: isSelf ? MAP.own : look.color,
+        // In daylight the tiles are left bright, and a white dot on a pale
+        // tile is no dot at all — so the ring goes dark and the fill keeps
+        // carrying the age.
+        color: daylight() ? MAP.outline : fill,
+        fillColor: fill,
         fillOpacity: look.opacity,
         opacity: look.opacity,
-        weight: dot.exact ? 2 : 1,
+        weight: daylight() ? 2 : (dot.exact ? 2 : 1),
       }));
     });
   });
@@ -1276,6 +1371,7 @@ const OUTCOME_LABEL = {
   boundary_eliminated: 'out of bounds',
   offline_eliminated: 'lost contact',
   quit: 'withdrew',
+  kicked: 'removed',
   panicked: 'panic',
 };
 
@@ -1359,18 +1455,26 @@ function renderScoreboard() {
 
 showView('view-landing');
 
-// A rematch link carries ?join=CODE. The name is remembered from last time so
-// nobody has to retype it between rounds.
-(function autoJoinFromUrl() {
+// A scanned QR and a rematch link both arrive as ?join=CODE. This used to
+// join immediately, which walked straight past the name field — outdoor
+// testing produced players with no names — and past the location prompt with
+// it, since that is asked from inside the join tap. So the link only fills
+// the form in: joining still goes through the button, one code path, name and
+// GPS permission included.
+(function prefillJoinFromUrl() {
   const code = new URLSearchParams(location.search).get('join');
   if (!code) return;
-  currentPlayerName = rememberedName() || 'Player';
-  el('input-name-join').value = currentPlayerName;
-  joinGame(code, currentPlayerName, false)
-    .then((ok) => {
-      if (!ok) return;
-      el('lobby-code').textContent = gameCode;
-      showView('view-lobby');
-    })
-    .catch(storeConnectionFailed);
+  el('input-code').value = code.toUpperCase();
+  const known = rememberedName();
+  if (known) el('input-name-join').value = known;
+
+  const prompt = el('join-prompt');
+  prompt.textContent = known
+    ? `Joining game ${code.toUpperCase()} — check your name and tap Join.`
+    : `Joining game ${code.toUpperCase()} — what should everyone call you?`;
+  prompt.style.display = 'block';
+
+  // Put them at the join card with the cursor where the missing bit is.
+  el('input-name-join').scrollIntoView({ block: 'center' });
+  if (!known) el('input-name-join').focus();
 })();

@@ -151,6 +151,86 @@ await host.waitForTimeout(500);
 const lobbyCount = await host.evaluate(() => Object.keys(playersState).length);
 check('all five players in lobby', lobbyCount === 5, `${lobbyCount} players`);
 
+// ---- a scanned QR must still ask who you are, and the host can remove you ----
+// Outdoor testing threw up both of these at once: the QR walked people past
+// the name field, and an uninvited stranger who had the code was unkickable.
+const stranger = await ctx.newPage();
+stranger.on('pageerror', (e) => { errors.push(`Stranger: ${e.message}`); });
+stranger.on('dialog', (d) => {
+  dialogs.push(`Stranger [${d.type()}] ${d.message().split('\n')[0]}`);
+  d.accept().catch(() => {});
+});
+await stranger.addInitScript(() => {
+  try {
+    localStorage.setItem('h_seen_help', '1');
+    // Every page in this suite shares one browser profile, so they share the
+    // remembered name too. A stranger scanning a QR on their own phone has
+    // never typed one, which is the case worth testing.
+    localStorage.removeItem('h_name');
+  } catch (e) {}
+});
+await stranger.goto(`${ORIGIN}/?${STORE_PARAM}pid=p9&sim=${BASE.lat},${BASE.lng}&join=${code}`);
+await stranger.waitForTimeout(700);
+
+const scanned = await stranger.evaluate(() => ({
+  view: document.querySelector('.view.active').id,
+  code: document.getElementById('input-code').value,
+  name: document.getElementById('input-name-join').value,
+  prompt: document.getElementById('join-prompt').textContent,
+}));
+check('a scanned join code stops at the name step',
+  scanned.view === 'view-landing' && scanned.code === code && scanned.name === ''
+  && /what should everyone call you/i.test(scanned.prompt),
+  `${scanned.view}, code "${scanned.code}", name "${scanned.name}"`);
+const noGhost = await host.evaluate(() => Object.keys(playersState).length);
+check('scanning alone does not put you in the game', noGhost === 5, `${noGhost} players`);
+
+// A blank name used to become "Player" silently. It is refused now.
+await stranger.click('#btn-join');
+await stranger.waitForTimeout(400);
+const blankRefused = await stranger.evaluate(() => document.querySelector('.view.active').id);
+check('joining without a name is refused', blankRefused === 'view-landing', blankRefused);
+
+await stranger.fill('#input-name-join', 'Uninvited');
+await stranger.click('#btn-join');
+await stranger.waitForSelector('#view-lobby.active', { timeout: 10000 });
+const joined = await until(host, () => !!playersState.p9);
+check('naming yourself then joining works', joined === true);
+
+// The host removes them. The suite dismisses dialogs by default, so the
+// confirm is stubbed out rather than fought with.
+await host.evaluate(() => {
+  window.__realConfirm = window.confirm;
+  window.confirm = () => true;
+});
+const kickClicked = await host.evaluate(() => {
+  const btn = document.querySelector('#lobby-players .kick-btn[aria-label="Remove Uninvited from the game"]');
+  if (!btn) return false;
+  btn.click();
+  return true;
+});
+check('the kick control is on the stranger\'s row', kickClicked === true);
+const kicked = await until(host, () => playersState.p9 && playersState.p9.status === 'kicked');
+check('the host can remove a player', kicked === true);
+
+const kickedOut = await until(stranger, () => document.querySelector('.view.active').id === 'view-landing');
+check('a removed player is told and taken out of the game', kickedOut === true);
+
+await host.evaluate(() => { window.confirm = window.__realConfirm; });
+const listAfterKick = await host.evaluate(() =>
+  document.querySelectorAll('#lobby-players li').length);
+check('a removed player leaves the lobby list', listAfterKick === 5, `${listAfterKick} rows`);
+
+// And the code alone no longer gets them back in.
+await stranger.fill('#input-name-join', 'Uninvited');
+await stranger.fill('#input-code', code);
+await stranger.click('#btn-join');
+await stranger.waitForTimeout(900);
+const rejoinRefused = await stranger.evaluate(() => document.querySelector('.view.active').id);
+check('a removed player cannot rejoin with the same code',
+  rejoinRefused === 'view-landing', rejoinRefused);
+await stranger.close();
+
 // A first-time player gets the primer without asking for it.
 const primer = await host.evaluate(() => {
   localStorage.removeItem('h_seen_help');
@@ -343,6 +423,50 @@ const mapLabels = await pages[1].evaluate(() => {
 });
 check('nothing on the map carries a label', mapLabels.length === 0,
   mapLabels.length ? mapLabels.join(' | ') : 'no labels on any layer');
+
+// -- Daylight mode: readable in a bright field, per player --
+// Read the tile rule off a probe element rather than a real tile: OSM tiles
+// do not load in this sandbox, and the point is the CSS, not the imagery.
+await pages[1].addScriptTag({ content: `
+  window.__readScreen = () => {
+    const probe = document.createElement('div');
+    probe.className = 'leaflet-tile';
+    document.body.appendChild(probe);
+    const tileFilter = getComputedStyle(probe).filter;
+    probe.remove();
+    const dot = worldLayer.getLayers()
+      .find((l) => l.options && l.options.radius === CONFIG.ping.dotRadiusPx);
+    return {
+      tileFilter,
+      ring: dot && dot.options.color,
+      fill: dot && dot.options.fillColor,
+      onBody: document.body.classList.contains('daylight'),
+      stored: localStorage.getItem('h_daylight'),
+      bg: getComputedStyle(document.body).backgroundColor,
+    };
+  };
+` });
+const dark = await pages[1].evaluate(() => window.__readScreen());
+await pages[1].evaluate(() => setDaylight(true));
+await pages[1].waitForTimeout(300);
+const bright = await pages[1].evaluate(() => window.__readScreen());
+
+check('daylight mode stops inverting the map into night',
+  /invert/.test(dark.tileFilter) && !/invert/.test(bright.tileFilter),
+  `dark "${dark.tileFilter}" -> bright "${bright.tileFilter}"`);
+check('daylight mode lifts the whole screen',
+  bright.onBody === true && bright.bg !== dark.bg, `${dark.bg} -> ${bright.bg}`);
+check('dots get a dark ring so they survive a pale tile',
+  !!dark.fill && dark.ring === dark.fill && !!bright.fill && bright.ring !== bright.fill,
+  `dark ring ${dark.ring} on ${dark.fill}; bright ring ${bright.ring} on ${bright.fill}`);
+check('the choice is remembered for next time', bright.stored === '1', bright.stored);
+
+// It is one player's choice, not the game's — they are not all standing in
+// the same light.
+const othersUnaffected = await pages[2].evaluate(() =>
+  document.body.classList.contains('daylight'));
+check('daylight is per player, not per game', othersUnaffected === false);
+await pages[1].evaluate(() => setDaylight(false));
 
 // -- Scan: directions only, one per hider, never a position --
 await runPower(1, 'scan');
