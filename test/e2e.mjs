@@ -123,6 +123,101 @@ check('boundary sets M from drawn area', Math.abs(boundaryInfo.M - 600) < 10,
 check('head start computed from diagonal', boundaryInfo.headstartMs > 0,
   `${Math.round(boundaryInfo.headstartMs / 60000)} min`);
 
+// Every distance rule stretches from the area the host drew, so the bound on
+// "how wrong is a reading" is read from the game rather than hardcoded here.
+const JITTER = await host.evaluate(() => pingJitterM());
+const JITTER_MAX = JITTER + 1;   // +1 for rounding in the metre readouts
+check('the play area sets how wrong readings are', JITTER === 30,
+  `M=600 gives ${JITTER}m`);
+
+// ---- every distance rule, swept across the sizes people actually play on ----
+// The point is not the individual numbers, it is that the relationships
+// between them survive a thirty-fold change in the size of the ground.
+const sweep = await host.evaluate(([sizes]) => {
+  const realM = M;
+  const rows = sizes.map((size) => {
+    M = size;
+    const bands = snitchBands();
+    return {
+      size,
+      jitter: pingJitterM(),
+      tripwire: tripwireRadiusM(),
+      disarm: disarmRadiusM(),
+      warning: boundaryWarningZoneM(),
+      iSeeYou: iSeeYouRadiusM(),
+      totem: totemRadiusM(size),
+      sabotagePrecision: totemPrecisionRadiusM(),
+      decoyCap: decoyMaxTravelM(),
+      bands,
+      headstartMin: headstartMsFor(size * Math.SQRT2, 90) / 60000,
+    };
+  });
+  M = realM;
+  return rows;
+}, [[100, 150, 250, 400, 600, 900, 1200, 2000, 3000]]);
+
+const gps = await host.evaluate(() => CONFIG.baseAccuracyRadiusM);
+const bad = (name, fn) => sweep.filter(fn).map((r) => `${r.size}m: ${name}`);
+
+check('nothing shrinks below what GPS itself can tell you',
+  !sweep.some((r) => r.jitter < gps || r.tripwire < gps || r.warning < gps),
+  `smallest: jitter ${Math.min(...sweep.map((r) => r.jitter))}m, `
+  + `tripwire ${Math.min(...sweep.map((r) => r.tripwire))}m (GPS is ${gps}m)`);
+
+check('a reading never leaves more ground than a person will search',
+  sweep.every((r) => Math.PI * r.jitter * r.jitter <= 7000),
+  `worst search disc ${Math.round(Math.max(...sweep.map((r) => Math.PI * r.jitter ** 2)))} m2`);
+
+check('readings get relatively sharper as the map grows, never vaguer',
+  sweep.every((r, i) => i === 0 || r.jitter >= sweep[i - 1].jitter)
+  && sweep.every((r, i) => i === 0
+    || (r.jitter / r.size) <= (sweep[i - 1].jitter / sweep[i - 1].size) + 1e-9),
+  sweep.map((r) => `${r.size}:${r.jitter}`).join(' '));
+
+check('one disarm always clears more ground than one tripwire covers',
+  sweep.every((r) => r.disarm > r.tripwire * 2),
+  bad('disarm too small', (r) => r.disarm <= r.tripwire * 2).join(', ') || 'holds at every size');
+
+check('a totem is always an area you stand in, not the spot you sabotage from',
+  sweep.every((r) => r.totem >= r.sabotagePrecision * 2),
+  bad('totem too small', (r) => r.totem < r.sabotagePrecision * 2).join(', ') || 'holds at every size');
+
+check('a totem never swallows the map',
+  sweep.every((r) => Math.PI * r.totem * r.totem <= 0.25 * r.size * r.size),
+  sweep.map((r) => `${r.size}:${(100 * Math.PI * r.totem ** 2 / r.size ** 2).toFixed(0)}%`).join(' '));
+
+check('the snitch bands stay in order and stay apart',
+  sweep.every((r) => r.bands.exactRangeM < r.bands.mediumRangeM
+    && r.bands.mediumRangeM < r.bands.wideRangeM
+    && r.bands.mediumCircleM < r.bands.wideCircleM
+    && r.bands.mediumCircleM >= gps),
+  `closest band ${sweep[0].bands.exactRangeM}m, widest ${sweep[sweep.length - 1].bands.wideRangeM}m`);
+
+check('I SEE YOU never grows past eye contact, and shrinks on a tiny map',
+  sweep.every((r) => r.iSeeYou <= 20) && sweep[0].iSeeYou < 20 && sweep[4].iSeeYou === 20,
+  sweep.map((r) => `${r.size}:${r.iSeeYou}`).join(' '));
+
+check('a decoy can never walk further than a quarter of the map',
+  sweep.every((r) => r.decoyCap <= 0.25 * r.size + 1),
+  `${Math.round(sweep[0].decoyCap)}m at 100m, ${Math.round(sweep[4].decoyCap)}m at 600m`);
+
+check('the head start never eats the round',
+  sweep.every((r) => r.headstartMin >= 2 && r.headstartMin <= 18),
+  sweep.map((r) => `${r.size}:${r.headstartMin.toFixed(0)}m`).join(' '));
+
+check('the 600m reference game is unchanged by any of this',
+  (() => {
+    const r = sweep[4];
+    return r.jitter === 30 && r.tripwire === 20 && r.disarm === 50
+      && r.warning === 20 && r.iSeeYou === 20 && r.totem === 76
+      && r.bands.exactRangeM === 100 && r.bands.mediumRangeM === 300
+      && r.bands.wideRangeM === 600 && r.bands.mediumCircleM === 50
+      && r.bands.wideCircleM === 150;
+  })(),
+  `jitter ${sweep[4].jitter}, tripwire ${sweep[4].tripwire}, disarm ${sweep[4].disarm}, `
+  + `totem ${sweep[4].totem}, snitch ${sweep[4].bands.exactRangeM}/`
+  + `${sweep[4].bands.mediumRangeM}/${sweep[4].bands.wideRangeM}`);
+
 // The host may override the computed head start (design doc Section 2).
 await host.waitForTimeout(400);
 const shownHeadstart = await host.inputValue('#input-headstart');
@@ -404,8 +499,8 @@ const offsets = await host.evaluate(() => {
   return (p.pings || []).map((d) =>
     Math.round(distanceM({ lat: d.lat, lng: d.lng }, { lat: p.realLat, lng: p.realLng })));
 });
-check('reported positions are wrong by up to ~30m',
-  offsets.length === 1 && offsets[0] > 0 && offsets[0] <= 31, `${offsets[0]}m off true position`);
+check(`reported positions are wrong by up to ~${JITTER}m`,
+  offsets.length === 1 && offsets[0] > 0 && offsets[0] <= JITTER_MAX, `${offsets[0]}m off true position`);
 
 await runPower(1, 'probe', { point: off(0, 400) });
 await host.waitForTimeout(900);
@@ -693,7 +788,7 @@ check('decoy makes the ping land where you are not',
   decoyed && decoyed.fromTrue > 250,
   decoyed ? `${decoyed.fromTrue}m from the real player` : 'no dot');
 check('the ping lands on the decoy instead',
-  decoyed && decoyed.fromDecoy <= 31,
+  decoyed && decoyed.fromDecoy <= JITTER_MAX,
   decoyed ? `${decoyed.fromDecoy}m from the decoy itself` : 'no dot');
 
 // And the decoy is walking, not standing: a minute on, it is a minute's walk
@@ -946,7 +1041,7 @@ const firstHuntDot = await until(host, ([since]) => {
   };
 }, [huntSince], 20000);
 check('a hunt pings the hunted hider straight away',
-  !!firstHuntDot && firstHuntDot.off <= 31,
+  !!firstHuntDot && firstHuntDot.off <= JITTER_MAX,
   firstHuntDot ? `${firstHuntDot.off}m off true position` : 'no dot');
 
 // And it is an ordinary ping, so Go quiet eats one.
@@ -986,7 +1081,7 @@ const decoyedHunt = await until(host, ([since]) => {
   };
 }, [decoySince], 25000);
 check('a decoy sends the hunt readings somewhere you are not',
-  !!decoyedHunt && decoyedHunt.fromTrue > 150 && decoyedHunt.fromDecoy <= 31,
+  !!decoyedHunt && decoyedHunt.fromTrue > 150 && decoyedHunt.fromDecoy <= JITTER_MAX,
   decoyedHunt ? `${decoyedHunt.fromTrue}m from the player, ${decoyedHunt.fromDecoy}m from the decoy`
     : 'no dot');
 await pages[2].evaluate(() => playerRef().update({ decoy: null }));
@@ -1117,7 +1212,7 @@ const breachExposure = await until(host, ([id, since]) => {
   return { off: Math.round(distanceM(last, { lat: h.realLat, lng: h.realLng })) };
 }, ['p4', breachSince], 25000);
 check('a breaching hider is pinged over and over until they come back',
-  !!breachExposure && breachExposure.off <= 31,
+  !!breachExposure && breachExposure.off <= JITTER_MAX,
   breachExposure ? `repeated dots, latest ${breachExposure.off}m off` : 'no repeat dots');
 
 // Nothing a hider can buy covers a breach — that is what makes it a penalty

@@ -125,7 +125,7 @@ function snitchAvailableReason(p, now) {
 // Stage 1: survey every other hider at range-banded fidelity.
 function snitchSurvey(now) {
   now = now || Date.now();
-  const c = CONFIG.snitch;
+  const c = snitchBands();
   const out = [];
 
   Object.entries(playersState).forEach(([id, p]) => {

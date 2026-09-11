@@ -144,7 +144,7 @@ backend works. `living-room.mjs` runs a browser with **no geolocation
 permission granted at all**, which is the point: the indoor game has to work
 on a device with no usable GPS.
 
-The outdoor suite drives a full five-player game and asserts 133 rules:
+The outdoor suite drives a full five-player game and asserts 145 rules:
 that nothing pings on its own, the Probe's half-world sweep and the 30m
 error on what it reports, dot colour across its ten-minute life, that the
 map carries no label of any kind except a panic alert, every power's effect
@@ -154,8 +154,9 @@ fidelity bands, signpost discovery,
 hand-assigned roles, daylight mode, I SEE YOU appearing at 20m and letting
 every tap through, closing a phone and the yellow-ringed stale readings and
 repayment debt that follow, being greyed out and reinstated, boundary breach
-exposure, capture, scoring, and that two concurrent transactions can't lose an
-update.
+exposure, capture, scoring, that every distance rule still relates sensibly to
+every other one across nine map sizes from 100m to 3km, and that two
+concurrent transactions can't lose an update.
 
 It also drives the two things outdoor testing broke: an uninvited player
 arriving by QR code — who has to stop and give a name, and cannot get back
@@ -178,9 +179,12 @@ prints the URL everyone opens. `wrangler login` first if you haven't.
    screen. See [Daylight mode](#daylight-mode).
 1. Host fills in a name and taps **Host Game**.
 2. In the lobby the host **draws the boundary** by tapping corners on the
-   map. This is worth doing properly: the area sets `M`, and every
-   distance rule (totem radius, sabotage time, uncertainty cap, head
-   start) scales from it. The lobby shows those numbers as you draw.
+   map. This is the most consequential thing anyone does: the area sets `M`,
+   and every distance rule in the game — how wrong readings are, how wide a
+   tripwire catches, how big a totem is, how long the head start runs —
+   stretches from it. The lobby prints all of those live as you draw, so you
+   can see the game you are about to play. See
+   [How the numbers scale](#how-the-numbers-scale-with-the-play-area).
 3. Everyone else joins with the code, or scans the QR in the lobby. A scanned
    link fills the form in and stops — you still type your name and tap
    **Join Game**, which is also where the location prompt comes from. A blank
@@ -345,6 +349,68 @@ on your map for the rest of the game and you can read it from 18m. Discovery
 is per player and never shared, so a sign appearing on your map tells you
 nothing about where anybody else has been — and leaving one somewhere out of
 the way is a real gamble that anyone ever finds it.
+
+## How the numbers scale with the play area
+
+The same game gets played on a school field and across a country estate, and
+a distance that is right at one is wrong at the other. `M = sqrt(area)` — a
+600m square is `M = 600` — and every distance rule is quoted at that
+reference size, then stretched. There are three kinds of number, treated
+differently on purpose:
+
+**Fixed** — anchored to a human body or to GPS itself. How far away you can
+see someone (I SEE YOU, 20m). How close two people must stand to share a spot
+(sabotage, 10m). How much a phone's position wanders (5m). How close you have
+to be to notice a signpost (10m) and read it (18m). None of this cares how big
+the map is, and scaling it would be a lie about the physical world — a sign
+that appears from 60m away is not a sign you found.
+
+**Scaled** — about searching a space. A tripwire is a bet on where somebody
+walks. A ping's error is how much ground you still have to cover after being
+told where to go. These stay the same fraction of the map at any size.
+
+**Clamped, at both ends.** Linear scaling fails twice over. Shrink a rule far
+enough and it drops below GPS's own error and stops working: a 6m tripwire
+fires at random or never. Grow it far enough and it stops being a game: a
+reading wrong by 75m leaves 17,000 m² to walk, half an hour for one ping in a
+ninety-minute round. The floors are set by physics; the ceilings by how long a
+person will actually spend looking.
+
+What that produces:
+
+| Play area (M) | 150 | 400 | 600 | 1200 | 2000 |
+|---|---|---|---|---|---|
+| Reading wrong by | 10m | 20m | **30m** | 45m | 45m |
+| — ground left to search | 314 m² | 1,257 m² | 2,827 m² | 6,362 m² | 6,362 m² |
+| Tripwire catches at | 15m | 15m | **20m** | 40m | 60m |
+| Disarm clears | 38m | 38m | **50m** | 100m | 150m |
+| Boundary warning at | 15m | 15m | **20m** | 40m | 50m |
+| I SEE YOU at | 18m | 20m | **20m** | 20m | 20m |
+| Totem radius | 30m | 50m | **76m** | 151m | 250m |
+| — sabotage takes | 1.2 min | 2.0 min | **3.0 min** | 6.0 min | 10.0 min |
+| Snitch: exact / wide | 25/150m | 67/400m | **100/600m** | 200/1200m | 200/1200m |
+| Head start | 2.1 min | 5.7 min | **8.5 min** | 17 min | 18 min |
+| *(walk across the map)* | *3 min* | *8 min* | *12 min* | *24 min* | *40 min* |
+
+Two things in that table are worth reading twice.
+
+**A reading gets relatively sharper as the map grows, and that is deliberate.**
+On a 2km estate the cost of a ping is not the search at the end, it is the
+twenty minutes of walking to get there. Adding a half-hour search on top would
+mean a seeker got three leads in a whole game. Travel already does the work.
+
+**The head start stops growing before the map does.** Half the diagonal of a
+2km estate is twenty-eight minutes, and nobody stands about for that. It is
+capped at a fifth of the round — which is also the honest signal that a 2km
+map does not fit in ninety minutes. The lobby prints all of these numbers live
+as you draw the boundary, so the host can see what they are choosing before
+anyone walks anywhere.
+
+Derived, never quoted twice: **disarm** is always 2.5 tripwires wide, and the
+**snitch bands** all come from one number, so a rebalance cannot leave a
+disarm that can't clear a wire or bands that overlap. The suite sweeps every
+rule across nine map sizes from 100m to 3km and asserts those relationships
+hold at all of them.
 
 ## Where the numbers live
 

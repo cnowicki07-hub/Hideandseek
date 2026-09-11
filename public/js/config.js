@@ -1,8 +1,53 @@
 // Central config — every tunable number lives here.
 // Matches Section 18 of the design doc. Edit this file to rebalance,
 // never hardcode a number elsewhere.
+//
+// ---------------------------------------------------------------
+// How distances scale with the size of the play area
+//
+// M = sqrt(area), so a 600m square is M = 600. The same game gets played on
+// a school field (M ~ 150) and across a country estate (M ~ 2000), and a
+// number that is right at one is wrong at the other. Three kinds of number
+// live below, and they are treated differently on purpose:
+//
+//   FIXED — anchored to a human body or to GPS itself. How far you can see
+//   someone, how close you have to stand to share a spot, how much a phone's
+//   position wanders. None of this cares how big the map is, so none of it
+//   scales. Scaling it would be a lie about the physical world.
+//
+//   SCALED — about searching a space. A tripwire is a bet on where somebody
+//   walks; a ping's error is how much ground you must still cover after you
+//   are told where to go. These are quoted at REFERENCE_M and stretched
+//   linearly, so they stay the same fraction of the map at any size.
+//
+//   CLAMPED — every scaled number, at both ends. Linear scaling fails twice.
+//   Shrunk far enough, a rule drops below GPS's own error and simply stops
+//   working — a 6m tripwire never fires. Grown far enough, it stops being a
+//   game: a ping wrong by 75m leaves a seeker 17,000 square metres to walk,
+//   which is half an hour for one reading in a ninety-minute round. The
+//   floors are set by physics, the ceilings by how long a person will
+//   actually spend looking.
+// ---------------------------------------------------------------
+
+const REFERENCE_M = 600;
+
+// The current game's M, or the reference if no boundary is set yet.
+function activeM() {
+  return (typeof M === 'number' && M > 0) ? M : REFERENCE_M;
+}
+
+// A distance quoted at REFERENCE_M, stretched to this game and held inside
+// its floor and ceiling. `m` is optional and only passed by the lobby, which
+// previews these numbers for a boundary that has not been saved yet.
+function scaledM(rule, m) {
+  const raw = rule.ref * ((m || activeM()) / REFERENCE_M);
+  return Math.round(Math.min(rule.max, Math.max(rule.min, raw)));
+}
 
 const CONFIG = {
+  // FIXED. Consumer GPS on a phone. Everything physical is built on this:
+  // it is the sabotage precision radius, the floor under every scaled
+  // distance, and the reason no rule is allowed to shrink below it.
   baseAccuracyRadiusM: 10,
   gameLengthMin: 90,
   endConditionMode: 'elimination', // or 'time_limit'
@@ -20,7 +65,9 @@ const CONFIG = {
   sync: {
     minWriteIntervalMs: 5000,   // never write more often than this
     keepaliveMs: 30000,         // ...but always write at least this often
-    movementThresholdM: 5,      // below this, treat the player as parked
+    // FIXED. The GPS noise floor — has this person actually moved, or is the
+    // phone wandering? Nothing to do with the size of the map.
+    movementThresholdM: 5,
     tickKeepaliveMs: 60000,     // contact heartbeat when GPS is unavailable
   },
 
@@ -43,22 +90,37 @@ const CONFIG = {
     // mark, then fading to nothing.
     lifetimeMs: 10 * 60000,
     fadeStartMs: 5 * 60000,
-    // Reported positions are wrong by up to this much, rolled fresh each
-    // time. Two pings on a player who has not moved an inch can land 60m
+    // SCALED. How wrong a reported position is, rolled fresh each time. Two
+    // pings on a player who has not moved an inch can land twice this far
     // apart in unrelated directions — so a still player can look like a
-    // moving one, and the trail drawn between their dots lies about which
-    // way they went. DISPLAY ONLY: never used for tripwires, sabotage,
-    // capture range or boundary checks.
-    jitterRadiusM: 30,
+    // moving one, and the trail drawn between their dots lies about which way
+    // they went. DISPLAY ONLY: never used for tripwires, sabotage, capture
+    // range or boundary checks.
+    //
+    // This is the single most size-sensitive number in the game, because it
+    // decides how much ground is left to search after a ping. The search is
+    // an area, so it grows as the square: 30m is ~2,800 m2, five minutes of
+    // pushing through scrub; 75m is ~17,000 m2, half an hour. Hence the
+    // ceiling. The floor is GPS itself — an error smaller than the phone's
+    // own wander is a fiction.
+    jitter: { ref: 30, min: 10, max: 45 },
     maxStored: 12, // dots kept per player; comfortably more than a lifetime
     dotRadiusPx: 7,
     trailWidthPx: 3,
   },
 
   hiderPowers: {
-    disarm: { cost: 15, radiusM: 50 },
+    // DERIVED. A disarm has to clear a corridor, not a point, so it is kept
+    // at a fixed multiple of whatever a tripwire covers in this game. Tie
+    // them together and the relationship survives every map size.
+    disarm: { cost: 15, radiusPerTripwire: 2.5 },
     go_quiet: { cost: 20, durationMs: 3 * 60000 },
-    decoy: { cost: 35, durationMs: 3 * 60000, paceKmh: 3 },
+    // FIXED pace — a decoy walks like a person. But the distance it can get
+    // to is capped as a share of the map: at three km/h a full three minutes
+    // is 150m, which is a quarter of a 600m map and the whole of a small one.
+    // Without this the decoy strolls out of the play area and the lie stops
+    // being believable.
+    decoy: { cost: 35, durationMs: 3 * 60000, paceKmh: 3, maxTravelFractionOfM: 0.25 },
     seeker_scan: { cost: 40, displayMs: 20000 },
   },
 
@@ -71,28 +133,53 @@ const CONFIG = {
     // screen edge, so it tells you how many and roughly where, and nothing
     // else. Cheap enough to use as the opener before a Probe.
     scan: { cost: 15, displayMs: 25000 },
-    tripwire: { cost: 5, triggerRadiusM: 20 },
-    // Passive, free, and mechanically inert on purpose: inside this radius a
-    // hider is told, in enormous letters, that they may no longer run. The
-    // app does not and cannot enforce it — the players do. It gives the
-    // seeker nothing at all, which is what keeps it out of the ping economy.
-    i_see_you: { radiusM: 20 },
+    // SCALED. A tripwire is a bet on where somebody walks, so it has to stay
+    // the same fraction of the ground they might cross. The floor is above
+    // GPS error, because a wire narrower than the phone's own wander would
+    // fire at random or never; the ceiling stops five charge from buying
+    // sixty metres of area denial.
+    tripwire: { cost: 5, trigger: { ref: 20, min: 15, max: 60 } },
+    // FIXED, with a small-map ceiling. This is eye contact distance: can the
+    // seeker plausibly see you? That does not change because the field is
+    // bigger, so it never grows. It does shrink on a very small map, where a
+    // flat 20m would leave it permanently on and stop meaning anything.
+    i_see_you: { radiusM: 20, maxFractionOfM: 0.12 },
     lockout: { cost: 25, durationMs: 3 * 60000 },
     totem: { cost: 60, maxUndeployed: 2, maxLive: 10 },
   },
 
+  // SCALED, all of it. Selling someone out is a question of how well you can
+  // make them out from where you stand, which is relative to the ground you
+  // are both on. The bands are derived from one number so they cannot drift
+  // apart: exact up close, a rough circle further out, nothing at all beyond.
+  // The ceiling is a limit on knowing anything useful about a person more
+  // than a kilometre away, whatever the map says.
   snitch: {
     cost: 20,
     displayMs: 15000,
-    exactRangeM: 100,
-    mediumCircleM: 50,
-    mediumRangeM: 300,
-    wideCircleM: 150,
-    wideRangeM: 600,
+    // The floor is set so the bands stay distinguishable rather than
+    // collapsing into "everyone is exact" on a small map: at 150 the closest
+    // band is 25m and the middle circle is about one GPS error wide.
+    wideRange: { ref: 600, min: 150, max: 1200 },
+    exactFraction: 1 / 6,     // of the wide range
+    mediumFraction: 1 / 2,
+    mediumCircleFraction: 1 / 6,  // of the medium range
+    wideCircleFraction: 1 / 4,    // of the wide range
   },
 
   totem: {
+    // SCALED, and the original — every other scaled number in this file was
+    // brought into line with it. The floor matters: a totem smaller than
+    // three GPS errors stops being an area you are inside and collapses into
+    // the ten-metre spot you sabotage from, which would make its anonymous
+    // report an exact one.
     radiusFraction: 0.126, // fraction of M
+    radiusMinM: 30,
+    radiusMaxM: 250,
+    // ...but the floor itself gives way on a very small map, where a flat 30m
+    // totem would swallow a quarter of the ground and two of them would cover
+    // everything.
+    radiusMaxFractionOfM: 0.25,
     pingIntervalMs: 60000,
     sabotageMinParticipants: 2,
     sabotageDecayRate: 0.5,
@@ -115,10 +202,15 @@ const CONFIG = {
   },
 
   signposts: {
-    // A sign is invisible until you walk into it. Once you have been this
-    // close it stays on your map for the rest of the game — you know it is
-    // there now. Discovery is per player and never shared, so a sign
-    // appearing on your map says nothing about where anyone else has been.
+    // FIXED. A sign is an object in the world: you find it by walking into
+    // it and read it by standing next to it. Both of those are about a
+    // person's eyes and a signpost's size, not the map's. Scaled up on a big
+    // map, signs would appear from nowhere and the fiction would break —
+    // which also means signs get found less often out there, and that is the
+    // correct consequence of leaving one somewhere nobody goes.
+    //
+    // Discovery is per player and never shared, so a sign appearing on your
+    // map says nothing about where anyone else has been.
     discoverRadiusM: 10,
     readRadiusM: 18,
     cost: 0,
@@ -126,14 +218,26 @@ const CONFIG = {
   },
 
   boundary: {
-    warningZoneM: 20,
+    // SCALED. How much warning you get before you are out. The floor keeps it
+    // above GPS wander, so standing still near the edge does not flicker; the
+    // ceiling stops a big map from warning you while you are still nowhere
+    // near the fence.
+    warningZone: { ref: 20, min: 15, max: 50 },
     breachTimerMs: 3 * 60000,
     confirmReadings: 3, // consecutive out-of-bounds fixes before a breach counts
   },
 
   headstart: {
+    // FIXED: this is how fast a person walks.
     walkingPaceKmh: 3,
     diagonalFraction: 0.5,
+    // CLAMPED against the clock, not the map. Half the diagonal of a two
+    // kilometre estate is twenty-eight minutes of walking — a third of the
+    // round spent with nobody hunting. Nobody waits that long, so the head
+    // start is capped as a share of the game and floored so a small map still
+    // gives the hiders a moment to get out of sight.
+    maxFractionOfGame: 0.2,
+    minMs: 2 * 60000,
   },
 
   // Phones get closed — deliberately, to save battery, or because they lock
@@ -241,8 +345,63 @@ function computeM(areaM2) {
   return Math.sqrt(areaM2);
 }
 
-function totemRadiusM(M) {
-  return CONFIG.totem.radiusFraction * M;
+// ---------- the scaled distances, one accessor each ----------
+
+function totemRadiusM(m) {
+  const t = CONFIG.totem;
+  const size = m || activeM();
+  const floor = Math.min(t.radiusMinM, t.radiusMaxFractionOfM * size);
+  return Math.round(Math.min(t.radiusMaxM,
+    Math.max(floor, t.radiusFraction * size)));
+}
+
+// How wrong every reported position is in this game.
+function pingJitterM(m) { return scaledM(CONFIG.ping.jitter, m); }
+
+// How wide a tripwire's net is, and how much ground one disarm clears.
+function tripwireRadiusM(m) { return scaledM(CONFIG.seekerPowers.tripwire.trigger, m); }
+function disarmRadiusM(m) {
+  return Math.round(tripwireRadiusM(m) * CONFIG.hiderPowers.disarm.radiusPerTripwire);
+}
+
+// How close to the fence you are warned.
+function boundaryWarningZoneM(m) { return scaledM(CONFIG.boundary.warningZone, m); }
+
+// Never grows past eye-contact distance; shrinks only on a map too small for
+// twenty metres to mean anything.
+function iSeeYouRadiusM(m) {
+  const c = CONFIG.seekerPowers.i_see_you;
+  return Math.round(Math.min(c.radiusM, c.maxFractionOfM * (m || activeM())));
+}
+
+// How far a decoy is allowed to get from where it was cast.
+function decoyMaxTravelM() {
+  return CONFIG.hiderPowers.decoy.maxTravelFractionOfM * activeM();
+}
+
+// The snitch's range bands, all derived from the one scaled number so they
+// can never drift out of order.
+function snitchBands(m) {
+  const c = CONFIG.snitch;
+  const wide = scaledM(c.wideRange, m);
+  const medium = Math.round(wide * c.mediumFraction);
+  return {
+    exactRangeM: Math.round(wide * c.exactFraction),
+    mediumRangeM: medium,
+    wideRangeM: wide,
+    mediumCircleM: Math.round(medium * c.mediumCircleFraction),
+    wideCircleM: Math.round(wide * c.wideCircleFraction),
+  };
+}
+
+// Half the walk across the play area, held between "long enough to get out of
+// sight" and "short enough that nobody is standing about".
+function headstartMsFor(diagonalM, gameLengthMin) {
+  const h = CONFIG.headstart;
+  const paceMs = (h.walkingPaceKmh * 1000) / 3600000; // metres per ms
+  const raw = (h.diagonalFraction * diagonalM) / paceMs;
+  const ceiling = (gameLengthMin || CONFIG.gameLengthMin) * 60000 * h.maxFractionOfGame;
+  return Math.round(Math.min(ceiling, Math.max(h.minMs, raw)));
 }
 
 function totemPrecisionOverrideM() {

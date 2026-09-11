@@ -214,7 +214,7 @@ function nearestSeekerM(now) {
 function iSeeYouActive(p, now) {
   if (!p || p.role !== 'hider' || p.status !== 'active') return false;
   if (!gameState || gameState.status !== 'active' || isPaused()) return false;
-  return nearestSeekerM(now) <= CONFIG.seekerPowers.i_see_you.radiusM;
+  return nearestSeekerM(now) <= iSeeYouRadiusM();
 }
 
 // Signs you have walked into. Kept per player and per game, and remembered

@@ -297,9 +297,15 @@ function updateBoundaryInfo() {
   }
   const area = polygonAreaM2(boundaryPoints);
   const mVal = computeM(area);
-  info.textContent = `${(area / 10000).toFixed(1)} ha · M = ${Math.round(mVal)}m · ` +
-    `totem radius ${Math.round(totemRadiusM(mVal))}m · ` +
-    `sabotage ${(totemSabotageSeconds(totemRadiusM(mVal)) / 60).toFixed(1)} min`;
+  // Every distance rule stretches from the area you draw, so the host gets
+  // to see what they are choosing while they are still choosing it.
+  info.innerHTML = `${(area / 10000).toFixed(1)} ha · M = ${Math.round(mVal)}m`
+    + `<br>Readings wrong by up to <strong>${pingJitterM(mVal)}m</strong>`
+    + ` · tripwires catch at ${tripwireRadiusM(mVal)}m`
+    + ` · disarm clears ${disarmRadiusM(mVal)}m`
+    + `<br>Totems ${totemRadiusM(mVal)}m wide, `
+    + `${(totemSabotageSeconds(totemRadiusM(mVal)) / 60).toFixed(1)} min to sabotage`
+    + ` · boundary warning at ${boundaryWarningZoneM(mVal)}m`;
 }
 
 el('btn-boundary-locate').onclick = () => {
@@ -700,6 +706,13 @@ function renderBanners(p, now) {
 
 // ---------- power buttons ----------
 
+// A description that quotes a distance is a function, so it quotes the
+// distance in THIS game rather than one from a 600m map.
+function powerDesc(def) {
+  if (!def) return '';
+  return typeof def.desc === 'function' ? def.desc() : def.desc;
+}
+
 function buildPowerButtons() {
   const host = el('power-buttons');
   host.innerHTML = '';
@@ -711,7 +724,7 @@ function buildPowerButtons() {
     b.className = 'power';
     b.dataset.power = key;
     b.innerHTML = `<span class="pname">${def.label}</span><span class="pcost">${def.cost()}</span>`;
-    b.title = def.desc;
+    b.title = powerDesc(def);
     b.onclick = () => requestPower(key);
     host.appendChild(b);
   });
@@ -724,7 +737,7 @@ function refreshPowerButtons(p, now) {
     const reason = powerBlockedReason(b.dataset.power, p, now);
     b.disabled = !!reason;
     b.classList.toggle('blocked', !!reason);
-    b.title = reason || POWERS[b.dataset.power].desc;
+    b.title = reason || powerDesc(POWERS[b.dataset.power]);
   });
 }
 
@@ -1139,7 +1152,7 @@ function renderWorld() {
   Object.values(tripwiresState).forEach((tw) => {
     if (tw.placedBy !== playerId) return;
     add(L.circle([tw.lat, tw.lng], {
-      radius: CONFIG.seekerPowers.tripwire.triggerRadiusM,
+      radius: tripwireRadiusM(),
       color: tw.triggered ? MAP.ash : MAP.gloom,
       fill: false, weight: 1, dashArray: '2 4',
     }));

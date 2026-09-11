@@ -78,9 +78,7 @@ async function hostCreateGame(opts) {
     ? LIVING_ROOM.hidingSeconds * 1000
     : 0;
   if (opts.mode !== 'livingroom' && boundary && boundary.length >= 3) {
-    const diag = polygonLongestDiagonalM(boundary);
-    const paceMs = (CONFIG.headstart.walkingPaceKmh * 1000) / 3600000; // m per ms
-    headstartMs = Math.round((CONFIG.headstart.diagonalFraction * diag) / paceMs);
+    headstartMs = headstartMsFor(polygonLongestDiagonalM(boundary), lengthMin);
   }
 
   await gameRef().set({
@@ -310,7 +308,7 @@ function onPosition(pos) {
 // disc. This is why a player who has not moved can appear to wander, and why
 // the trail drawn between their dots can point somewhere they never went.
 function jitterPoint(point) {
-  const r = CONFIG.ping.jitterRadiusM;
+  const r = pingJitterM();
   if (!r) return { lat: point.lat, lng: point.lng };
   return randomPointInRadius(point, r);
 }
@@ -355,7 +353,10 @@ async function emitPing(targetId, position, opts) {
 // keeps going on the bearing you chose, at a walking pace, until it expires.
 function decoyPositionAt(decoy, now) {
   const paceMPerMs = (CONFIG.hiderPowers.decoy.paceKmh * 1000) / 3600000;
-  const travelled = ((now || Date.now()) - decoy.startedAt) * paceMPerMs;
+  // Held to a share of the play area, so on a small map the decoy does not
+  // simply walk off the edge of the world and stop being a believable you.
+  const travelled = Math.min(decoyMaxTravelM(),
+    ((now || Date.now()) - decoy.startedAt) * paceMPerMs);
   return destinationPoint(
     { lat: decoy.originLat, lng: decoy.originLng }, decoy.bearing, travelled);
 }
@@ -562,9 +563,8 @@ async function setBoundary(points) {
   const areaM2 = polygonAreaM2(points);
   const newM = computeM(areaM2);
   const diag = polygonLongestDiagonalM(points);
-  const paceMs = (CONFIG.headstart.walkingPaceKmh * 1000) / 3600000;
-  const headstartMs = Math.round((CONFIG.headstart.diagonalFraction * diag) / paceMs);
   M = newM;
+  const headstartMs = headstartMsFor(diag, gameState && gameState.gameLengthMin);
   await gameRef().update({ boundary: points, areaM2, M: newM, headstartMs });
   return { areaM2, M: newM, headstartMs };
 }
@@ -986,7 +986,7 @@ function expireActivePower(p, now) {
 
 // A hider's own client trips any tripwire it walks into (design doc 5.3).
 function tickTripwires(p, now) {
-  const radius = CONFIG.seekerPowers.tripwire.triggerRadiusM;
+  const radius = tripwireRadiusM();
   Object.entries(tripwiresState).forEach(([id, tw]) => {
     if (tw.triggered) return;
     if (distanceM(myPos, { lat: tw.lat, lng: tw.lng }) > radius) return;
@@ -1009,7 +1009,7 @@ function tickBoundary(p, now) {
   const edgeDist = distanceToPolygonEdgeM(myPos, boundary);
 
   if (inside) {
-    setBoundaryWarning(edgeDist <= CONFIG.boundary.warningZoneM ? edgeDist : null);
+    setBoundaryWarning(edgeDist <= boundaryWarningZoneM() ? edgeDist : null);
     if (p.outOfBoundsReadings || p.breachStartedAt) {
       playerRef().update({ outOfBoundsReadings: 0, breachStartedAt: 0 });
       if (p.breachStartedAt) toast('Back inside the boundary — countdown cancelled.');

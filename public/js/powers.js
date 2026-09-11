@@ -66,10 +66,11 @@ const POWERS = {
 
   probe: {
     role: 'seeker', label: 'Probe',
-    desc: 'Tap the map to send a wave sweeping out across that entire half of '
+    desc: () => 'Tap the map to send a wave sweeping out across that entire half of '
       + 'the world, to the boundary. Everyone it passes gets pinged. The most '
       + 'you can learn in one action — two of them cover everything — but what '
-      + 'it reports is only good to about 30m. Scan first to pick the half.',
+      + `it reports is only good to about ${pingJitterM()}m. Scan first to `
+      + 'pick the half.',
     cost: () => CONFIG.seekerPowers.probe.cost,
     target: 'point',
     async run(ctx) {
@@ -99,9 +100,10 @@ const POWERS = {
 
   tripwire: {
     role: 'seeker', label: 'Tripwire',
-    desc: 'Leaves a hidden trap where you stand. If a hider passes within 20m '
-      + 'it tells you exactly where they were — the only reading in the game '
-      + 'that is not fuzzy. Dirt cheap, but you have to guess where they walk.',
+    desc: () => `Leaves a hidden trap where you stand. If a hider passes within `
+      + `${tripwireRadiusM()}m it tells you exactly where they were — the only `
+      + 'reading in the game that is not fuzzy. Dirt cheap, but you have to '
+      + 'guess where they walk.',
     cost: () => CONFIG.seekerPowers.tripwire.cost,
     target: 'self',
     async run() {
@@ -205,12 +207,13 @@ const POWERS = {
 
   disarm: {
     role: 'hider', label: 'Disarm',
-    desc: 'Finds and destroys any hidden tripwires within 50m of you. Worth '
-      + 'spending before a gate, a bridge, or anywhere obvious you have to cross.',
+    desc: () => `Finds and destroys any hidden tripwires within ${disarmRadiusM()}m `
+      + 'of you. Worth spending before a gate, a bridge, or anywhere obvious '
+      + 'you have to cross.',
     cost: () => CONFIG.hiderPowers.disarm.cost,
     target: 'self',
     async run() {
-      const radius = CONFIG.hiderPowers.disarm.radiusM;
+      const radius = disarmRadiusM();
       const found = [];
       const deletions = [];
       Object.entries(tripwiresState).forEach(([id, tw]) => {
@@ -221,7 +224,9 @@ const POWERS = {
       });
       await Promise.all(deletions);
       reveals.disarm = { points: found, expiresAt: Date.now() + 15000 };
-      toast(found.length ? `Destroyed ${found.length} tripwire(s).` : 'No tripwires within 50m.');
+      toast(found.length
+        ? `Destroyed ${found.length} tripwire(s).`
+        : `No tripwires within ${radius}m.`);
       renderWorld();
     },
   },
