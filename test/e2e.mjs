@@ -118,6 +118,26 @@ check('host creates game', !!code && code.length === 5, `code ${code}`);
 
 // Set the boundary directly rather than simulating taps on a Leaflet canvas.
 const boundaryInfo = await host.evaluate((b) => setBoundary(b), BOUNDARY);
+// A boundary can be drawn flat, or three metres across, and every distance
+// rule then sits on its floor. The lobby refuses it rather than letting the
+// host find out on the day.
+const degenerate = await host.evaluate(([o]) => {
+  const at = (dE, dN) => ({
+    lat: o.lat + dN / 111320,
+    lng: o.lng + dE / (111320 * Math.cos(o.lat * Math.PI / 180)),
+  });
+  return Promise.all([
+    setBoundary([at(0, 0), at(100, 0), at(200, 0)]),          // flat
+    setBoundary([at(0, 0), at(3, 0), at(3, 3), at(0, 3)]),    // a desk
+  ]);
+}, [BASE]);
+check('a boundary with no room in it is refused',
+  degenerate.every((r) => r.rejected === true),
+  degenerate.map((r) => `M=${Math.round(r.M)}`).join(', '));
+const survivedRefusal = await host.evaluate(() => Math.round(gameState.M));
+check('and the good boundary is still the one in force', survivedRefusal === 600,
+  `M=${survivedRefusal}`);
+
 check('boundary sets M from drawn area', Math.abs(boundaryInfo.M - 600) < 10,
   `M=${Math.round(boundaryInfo.M)} (expected ~600)`);
 check('head start computed from diagonal', boundaryInfo.headstartMs > 0,
@@ -682,6 +702,37 @@ await teleport(3, off(0, -200));   // back south, clear of the seeker
 const isyCleared = await until(pages[3], () =>
   !document.getElementById('i-see-you').classList.contains('on'), null, 20000);
 check('it clears once the hider is clear', isyCleared === true);
+
+// -- The conductor: the game keeps applying its own rules without the host --
+// Releasing the seekers, greying out a dark phone and ending the game have
+// to run on exactly one client. They used to run on the host's, which made a
+// host who quit or shut their phone able to brick the game — simulation
+// found it twice. The job is elected now.
+const conductor = await host.evaluate(([hostId]) => {
+  const normally = conductorId();
+  const saved = { ...playersState[hostId] };
+
+  playersState[hostId] = { ...saved, status: 'quit' };
+  const afterQuit = conductorId();
+  playersState[hostId] = { ...saved, lastContactAt: Date.now() - 10 * 60000 };
+  const afterDark = conductorId();
+  Object.keys(playersState).forEach((id) => {
+    playersState[id] = { ...playersState[id], status: 'quit' };
+  });
+  const afterEveryone = conductorId();
+
+  Object.keys(playersState).forEach((id) => { delete playersState[id]; });
+  return { normally, afterQuit, afterDark, afterEveryone, hostId };
+}, ['p0']);
+await until(host, () => Object.keys(playersState).length === 5);
+check('the host conducts while they are playing', conductor.normally === 'p0', conductor.normally);
+check('someone else picks it up when the host quits',
+  conductor.afterQuit && conductor.afterQuit !== 'p0', conductor.afterQuit);
+check('and when the host\'s phone goes dark',
+  conductor.afterDark && conductor.afterDark !== 'p0', conductor.afterDark);
+check('nobody conducts when nobody is left to', conductor.afterEveryone === null);
+check('every client elects the same one',
+  (await pages[3].evaluate(() => conductorId())) === 'p0');
 
 // -- No blanking period between powers --
 const backToBack = await pages[1].evaluate(async () => {
@@ -1514,6 +1565,24 @@ check('scoreboard scores only players who were hiders', board.rows.length === 3,
 check('original seekers are listed separately, not ranked',
   !board.rows.some((r) => r.startsWith('Host') || r.startsWith('Seek2')) &&
   /Seekers: (Host, Seek2|Seek2, Host)\./.test(board.summary), board.summary);
+// -- Events are a channel, not a history --
+const pruning = await host.evaluate(async () => {
+  const before = Object.keys(eventsState).length;
+  await gameRef().collection('events').add({
+    type: 'pinged', to: 'p0', createdAt: Date.now() - 20 * 60000, seenBy: {},
+  });
+  await new Promise((r) => setTimeout(r, 400));
+  const withOld = Object.keys(eventsState).length;
+  lastPruneAt = 0;
+  pruneStaleEvents(Date.now());
+  await new Promise((r) => setTimeout(r, 600));
+  return { before, withOld, after: Object.keys(eventsState).length };
+});
+check('events older than the window are cleared out',
+  pruning.withOld > pruning.after,
+  `${pruning.withOld} events, ${pruning.after} after pruning`);
+check('recent events survive the prune', pruning.after > 0, `${pruning.after} kept`);
+
 // -- The walk-through: the one time true movement is ever shown --
 const replay = await host.evaluate(() => {
   renderReplay();

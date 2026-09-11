@@ -227,6 +227,11 @@ const CONFIG = {
     // ceiling stops a big map from warning you while you are still nowhere
     // near the fence.
     warningZone: { ref: 20, min: 15, max: 50 },
+    // The smallest play area the lobby will accept. Below this every scaled
+    // rule is sitting on its floor and the distances stop relating to each
+    // other at all — a 3m boundary gives a 1m totem. 25m is a back garden,
+    // which is already smaller than anything sensible.
+    minM: 25,
     breachTimerMs: 3 * 60000,
     confirmReadings: 3, // consecutive out-of-bounds fixes before a breach counts
   },
@@ -267,6 +272,14 @@ const CONFIG = {
   chat: {
     maxLength: 160,
     maxMessages: 120,
+  },
+
+  // Events are a push channel, not a history. Anything older than the window
+  // handleEvents will look at is dead weight that a reconnecting client still
+  // has to download, so the conductor clears it out.
+  events: {
+    keepMs: 5 * 60000,
+    pruneIntervalMs: 60000,
   },
 
   // Phones get closed — deliberately, to save battery, or because they lock

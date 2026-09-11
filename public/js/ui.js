@@ -465,6 +465,11 @@ el('btn-boundary-clear').onclick = () => { boundaryPoints = []; drawBoundaryDraf
 el('btn-boundary-save').onclick = async () => {
   if (boundaryPoints.length < 3) { alert('Drop at least 3 corners first.'); return; }
   const r = await setBoundary(boundaryPoints);
+  if (r.rejected) {
+    alert(`That area is too small to play in — every distance in the game would `
+      + `collapse to its minimum. Draw at least ${r.minM}m across.`);
+    return;
+  }
   toast(`Boundary set — ${(r.areaM2 / 10000).toFixed(1)} ha.`);
   updateHeadstartInfo();
 };

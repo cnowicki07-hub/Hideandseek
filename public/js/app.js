@@ -24,6 +24,7 @@ let totemsState = {};
 let tripwiresState = {};
 let signpostsState = {};
 let chatState = {};
+let eventsState = {};
 
 let myPos = null;              // latest real GPS fix for this device
 let recentFixes = [];          // for movement-state detection
@@ -583,6 +584,12 @@ function hidersStillHiding() {
 async function setBoundary(points) {
   const areaM2 = polygonAreaM2(points);
   const newM = computeM(areaM2);
+  // A boundary can be drawn flat, or three metres across, and every distance
+  // rule then falls to its floor and the game is nonsense. Refuse it here
+  // rather than letting the host find out on the day.
+  if (!(newM >= CONFIG.boundary.minM)) {
+    return { rejected: true, areaM2, M: newM, minM: CONFIG.boundary.minM };
+  }
   const diag = polygonLongestDiagonalM(points);
   M = newM;
   const headstartMs = headstartMsFor(diag, gameState && gameState.gameLengthMin);
@@ -965,6 +972,7 @@ function subscribeToWorld() {
   gameRef().collection('events').onSnapshot((snap) => {
     const evts = [];
     snap.forEach((d) => evts.push({ id: d.id, ...d.data() }));
+    eventsState = Object.fromEntries(evts.map((e) => [e.id, e]));
     handleEvents(evts);
   });
 }
@@ -1040,7 +1048,7 @@ function tick() {
   if (myPos) tickSignpostDiscovery();
   tickPingDebt(p, now);
   tickHunt(p, now);
-  if (p.isHost) tickHostChecks(now);
+  if (conductorId(now) === playerId) tickConductorChecks(now);
 
   refreshHud();
   renderWorld();
@@ -1106,7 +1114,37 @@ function tickBoundary(p, now) {
   }
 }
 
-function tickHostChecks(now) {
+// ---------- the conductor ----------
+//
+// Some rules belong to the game rather than to a player: releasing the
+// seekers when hiding time is up, greying out a phone that has gone dark,
+// and ending the game. They have to run on exactly one client — run them
+// everywhere and they fire once per player — so they used to run on the
+// host's.
+//
+// That made the host a single point of failure, and simulation caught it
+// twice over. A host who quits or panics stops ticking, because tick()
+// returns early for anyone who is not active: every hider could be captured
+// and the game would never end. A host who closes their phone during hiding
+// time stops the hiding clock, and the seekers are never released at all.
+//
+// So the job is elected instead of assigned. Every client picks the same
+// player, because every client is looking at the same state: the host if
+// they are still playing and still reporting, otherwise the lowest id among
+// those who are. Nothing here is a host privilege — pausing, ending early
+// and reinstating people still are, and stay on the host's menu — these are
+// just the rules the game has to keep applying to itself.
+function conductorId(now) {
+  now = now || Date.now();
+  const running = Object.entries(playersState)
+    .filter(([, p]) => p.status === 'active' && !playerUnavailable(p, now))
+    .map(([id]) => id);
+  if (!running.length) return null;
+  const host = running.find((id) => playersState[id].isHost);
+  return host || running.sort()[0];
+}
+
+function tickConductorChecks(now) {
   // Release the seekers as soon as every hider says they're hidden, or when
   // the hiding clock runs out — whichever comes first.
   if (isHiding()) {
@@ -1117,14 +1155,14 @@ function tickHostChecks(now) {
     return;
   }
 
-  // Offline flag / auto-elimination, and the end condition. Run by the host's
-  // client only, so these fire once rather than once per player.
   // Long enough unavailable and they are greyed out — not eliminated. The
   // host can put them back, which is why this is a status and not an ending.
   Object.entries(playersState).forEach(([id, p]) => {
     if (p.status !== 'active') return;
     if (unavailableForMs(p, now) >= CONFIG.offline.awayAfterMs) markAway(id, now);
   });
+
+  pruneStaleEvents(now);
 
   const hidersLeft = Object.values(playersState)
     .filter((p) => p.role === 'hider' && p.status === 'active').length;
@@ -1136,6 +1174,24 @@ function tickHostChecks(now) {
       (mode === 'elimination' && timeUp)) {
     endGameNow();
   }
+}
+
+// Events are a push channel, not a record. Anything older than the window
+// handleEvents will even look at is dead weight — and because a client that
+// joins or reconnects is sent every document that exists, an unpruned
+// history is a download that grows for the whole game. Simulation measured
+// about 840 events an hour, so this keeps a late joiner's first payload flat
+// instead of proportional to how long everyone else has been playing.
+let lastPruneAt = 0;
+function pruneStaleEvents(now) {
+  if (now - lastPruneAt < CONFIG.events.pruneIntervalMs) return;
+  lastPruneAt = now;
+  const cutoff = now - CONFIG.events.keepMs;
+  Object.entries(eventsState).forEach(([id, e]) => {
+    if ((e.createdAt || now) < cutoff) {
+      gameRef().collection('events').doc(id).delete().catch(() => {});
+    }
+  });
 }
 
 function anyHiderEverAssigned() {

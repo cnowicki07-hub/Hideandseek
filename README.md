@@ -144,7 +144,7 @@ backend works. `living-room.mjs` runs a browser with **no geolocation
 permission granted at all**, which is the point: the indoor game has to work
 on a device with no usable GPS.
 
-The outdoor suite drives a full five-player game and asserts 177 rules:
+The outdoor suite drives a full five-player game and asserts 186 rules:
 that nothing pings on its own, the Probe's half-world sweep and the 30m
 error on what it reports, dot colour across its ten-minute life, that the
 map carries no label of any kind except a panic alert, every power's effect
@@ -159,14 +159,36 @@ end-of-game walk-through of true movement, I SEE YOU appearing at 20m and lettin
 every tap through, closing a phone and the yellow-ringed stale readings and
 repayment debt that follow, being greyed out and reinstated, boundary breach
 exposure, capture, scoring, that every distance rule still relates sensibly to
-every other one across nine map sizes from 100m to 3km, and that two
-concurrent transactions can't lose an update.
+every other one across nine map sizes from 100m to 3km, that the game keeps
+applying its own rules when the host stops playing, that a boundary with no
+room in it is refused, and that two concurrent transactions can't lose an
+update.
 
 It also drives the two things outdoor testing broke: an uninvited player
 arriving by QR code — who has to stop and give a name, and cannot get back
 in once the host removes them — and a removed player disappearing from the
 lobby's arithmetic instead of holding the Start button down. Worth
 re-running after any change to `public/js/config.js`.
+
+### Simulation
+
+```
+node test/sim.mjs                 # every scenario
+BASE_URL=http://localhost:8787 node test/sim.mjs           # against the real backend
+node test/sim.mjs host            # one by name
+```
+
+A different job from the rule suite. `e2e.mjs` asks "does each rule do what
+it says"; `sim.mjs` puts the game in situations nobody wrote a rule for and
+watches what happens — a host who quits halfway through, two players or
+twelve, three seekers capturing the same hider on the same tick, two minutes
+of everybody spending everything, boundaries drawn flat or three metres
+across.
+
+It reports **bugs** and **notes** rather than pass/fail, because most of what
+it finds is a judgement call. It has already earned its keep: it found the
+conductor problem below, which the rule suite could never have caught,
+because every individual rule was working correctly.
 
 ## 2. Deploy
 
@@ -511,6 +533,28 @@ chrome, which is the only way the map gets the whole display.
 The compass needs its own permission on iOS, asked for when you first turn it
 on, and reads `webkitCompassHeading` where it exists — that is a true heading,
 unlike the `alpha` everyone else reports, which counts the other way round.
+
+## The conductor
+
+Some rules belong to the game rather than to a player — releasing the seekers
+when hiding time is up, greying out a phone that has gone dark, ending the
+game when the last hider is found. They have to run on exactly one client or
+they fire once per player.
+
+They used to run on the host's, which made the host a single point of failure.
+Simulation found it twice over:
+
+- A host who **quits or panics** stops ticking, because the tick returns early
+  for anyone who is not active. Every hider could be captured and the game
+  would never end.
+- A host who **closes their phone during hiding time** stops the hiding clock.
+  The seekers are never released and nobody can do anything at all.
+
+The job is elected now rather than assigned. Every client picks the same
+player because every client is reading the same state: the host if they are
+still playing and still reporting, otherwise the lowest id among those who
+are. Nothing in it is a host *privilege* — pausing, ending early and
+reinstating people still are, and stay on the host's menu.
 
 ## Where the numbers live
 
