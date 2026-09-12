@@ -106,15 +106,20 @@ el('input-mode').onchange = () => {
   el('mode-note').textContent = solo
     ? 'The living-room game with nobody else in the room. The others are run by '
       + 'this phone, on the same rules — they spend charge, they get pinged, and '
-      + 'they only know what the game would have told them.'
+      + 'they only know what the game would have told them. Set any size you '
+      + 'like below, and redraw the area anywhere on the map in the lobby.'
     : onScreen
       ? 'Played sitting together. Tap the map to send your token somewhere and it walks there — '
         + 'GPS cannot work indoors, so travel happens on screen. One round is about 10 minutes.'
       : 'Played on foot across a real area you draw on the map.';
   el('solo-setup').style.display = solo ? 'block' : 'none';
-  el('input-area-side').parentElement.style.opacity = onScreen ? 0.4 : 1;
+  // Solo uses the size you type — it is the mode you would test a size in.
+  el('input-area-side').parentElement.style.opacity = (onScreen && !solo) ? 0.4 : 1;
+  el('input-area-side').disabled = onScreen && !solo;
   el('input-length').parentElement.style.opacity = onScreen ? 0.4 : 1;
+  updateAreaPreview();
 };
+updateAreaPreview();
 
 el('btn-retry-location').onclick = async () => {
   await requestLocation();
@@ -374,7 +379,11 @@ el('btn-host').onclick = async () => {
     const centre = myPos || { lat: 51.5074, lng: -0.1278 };
     opts.mode = 'livingroom';
     opts.solo = mode === 'solo';
-    opts.boundary = squareBoundaryAround(centre, LIVING_ROOM.defaultAreaSideM);
+    // Solo starts from the size you asked for rather than a fixed one, and
+    // the area can be moved and redrawn in the lobby. The living room stays
+    // zero-setup on purpose.
+    opts.boundary = squareBoundaryAround(centre,
+      mode === 'solo' ? sideM : LIVING_ROOM.defaultAreaSideM);
     opts.gameLengthMin = LIVING_ROOM.gameLengthMin;
   }
   try {
@@ -449,24 +458,51 @@ function drawBoundaryDraft() {
   updateBoundaryInfo();
 }
 
+// Every distance rule stretches from the area, so wherever someone is
+// choosing an area they get to see what they are choosing while they choose
+// it — on the landing form as they type a size, and on the boundary map as
+// they drop corners.
+// `withTimes` is off on the landing form, because the mode's time scaling has
+// not been applied yet there — an indoor round compresses every duration
+// ninefold, so quoting a sabotage time before the game exists would be a
+// number that changes the moment you host. Distances do not move: they come
+// from the area alone.
+function scaledRulesHtml(areaM2, withTimes) {
+  const mVal = computeM(areaM2);
+  let out = `${(areaM2 / 10000).toFixed(1)} ha · M = ${Math.round(mVal)}m`
+    + `<br>Readings wrong by up to <strong>${pingJitterM(mVal)}m</strong>`
+    + ` · tripwires catch at ${tripwireRadiusM(mVal)}m`
+    + ` · disarm clears ${disarmRadiusM(mVal)}m`
+    + `<br>Totems ${totemRadiusM(mVal)}m wide`;
+  if (withTimes) {
+    out += `, ${(totemSabotageSeconds(totemRadiusM(mVal)) / 60).toFixed(1)} min to sabotage`;
+  }
+  return `${out} · boundary warning at ${boundaryWarningZoneM(mVal)}m`;
+}
+
 function updateBoundaryInfo() {
   const info = el('boundary-info');
   if (boundaryPoints.length < 3) {
     info.textContent = `${boundaryPoints.length} corner(s) — need at least 3.`;
     return;
   }
-  const area = polygonAreaM2(boundaryPoints);
-  const mVal = computeM(area);
-  // Every distance rule stretches from the area you draw, so the host gets
-  // to see what they are choosing while they are still choosing it.
-  info.innerHTML = `${(area / 10000).toFixed(1)} ha · M = ${Math.round(mVal)}m`
-    + `<br>Readings wrong by up to <strong>${pingJitterM(mVal)}m</strong>`
-    + ` · tripwires catch at ${tripwireRadiusM(mVal)}m`
-    + ` · disarm clears ${disarmRadiusM(mVal)}m`
-    + `<br>Totems ${totemRadiusM(mVal)}m wide, `
-    + `${(totemSabotageSeconds(totemRadiusM(mVal)) / 60).toFixed(1)} min to sabotage`
-    + ` · boundary warning at ${boundaryWarningZoneM(mVal)}m`;
+  info.innerHTML = scaledRulesHtml(polygonAreaM2(boundaryPoints), true);
 }
+
+// The landing form's live preview, so a size can be tried against the rules
+// without hosting anything.
+function updateAreaPreview() {
+  const box = el('area-preview');
+  if (!box) return;
+  const mode = el('input-mode').value;
+  if (mode === 'livingroom') { box.style.display = 'none'; return; }
+  const side = parseFloat(el('input-area-side').value);
+  box.style.display = 'block';
+  if (!(side > 0)) { box.textContent = 'Enter a size to see what it does to the rules.'; return; }
+  box.innerHTML = scaledRulesHtml(side * side, false)
+    + (mode === 'solo' ? '<br><em>Durations compress about ninefold indoors.</em>' : '');
+}
+el('input-area-side').addEventListener('input', updateAreaPreview);
 
 el('btn-boundary-locate').onclick = () => {
   if (!navigator.geolocation) { toast('No GPS on this device.'); return; }
@@ -632,10 +668,14 @@ function renderLobby(players) {
   // Driven by the player document rather than set once at host time, so a
   // rematch host still gets their controls after the page reloads.
   el('host-controls').style.display = p.isHost ? 'block' : 'none';
-  // The boundary is generated indoors, so there is nothing to draw.
+  // The boundary is generated in the living room, so there is nothing to
+  // draw. Solo keeps it: an area was generated to get you started, but the
+  // whole point of playing alone is being able to try the game at a size and
+  // a place of your choosing.
+  const drawable = !usingTravelMode() || soloGame();
   const boundaryCard = el('boundary-map').closest('.card');
-  if (boundaryCard) boundaryCard.style.display = usingTravelMode() ? 'none' : 'block';
-  if (p.isHost && !usingTravelMode()) initBoundaryMap();
+  if (boundaryCard) boundaryCard.style.display = drawable ? 'block' : 'none';
+  if (p.isHost && drawable) initBoundaryMap();
 
   const title = el('role-title');
   const note = el('role-note');

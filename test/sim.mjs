@@ -547,7 +547,7 @@ SCENARIOS.geometry = async () => {
 // that client is holding every true position in memory. It must not use
 // them.
 // ---------------------------------------------------------------
-async function soloGameUp(role, bots) {
+async function soloGameUp(role, bots, sideM) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const errors = [];
   const p = await ctx.newPage();
@@ -561,6 +561,10 @@ async function soloGameUp(role, bots) {
   await p.dispatchEvent('#input-mode', 'change');
   await p.selectOption('#input-solo-role', role);
   await p.fill('#input-solo-bots', String(bots));
+  if (sideM) {
+    await p.fill('#input-area-side', String(sideM));
+    await p.dispatchEvent('#input-area-side', 'input');
+  }
   await p.click('#btn-host');
   await p.waitForSelector('#view-lobby.active', { timeout: 20000 });
   return { ctx, p, errors };
@@ -686,6 +690,94 @@ SCENARIOS.solo = async () => {
     ok('a caught bot changes sides like anybody else');
   }
   await solo2.ctx.close();
+  return errors;
+};
+
+// ---------------------------------------------------------------
+// 9. Solo at a size and a place of your choosing
+//
+// Solo is the mode you would test the scaling in, so it has to let you set
+// an area and put it somewhere — it used to force a 400m square in London
+// with no way to change either.
+// ---------------------------------------------------------------
+SCENARIOS.soloscale = async () => {
+  const errors = [];
+
+  // The landing form previews what a size does to the rules before you
+  // commit to anything.
+  const { ctx, p, errors: e1 } = await soloGameUp('hider', 2, 1200);
+  errors.push(...e1);
+
+  const preview = await p.evaluate(() => {
+    const out = {};
+    ['150', '600', '1500'].forEach((side) => {
+      document.getElementById('input-area-side').value = side;
+      updateAreaPreview();
+      out[side] = document.getElementById('area-preview').textContent;
+    });
+    return out;
+  });
+  const moves = ['150', '600', '1500'].map((k) => /wrong by up to (\d+)m/.exec(preview[k]))
+    .map((m) => (m ? Number(m[1]) : null));
+  if (moves.some((v) => v == null) || !(moves[0] < moves[1] && moves[1] <= moves[2])) {
+    finding('bug', 'the landing form does not preview what a size does to the rules',
+      JSON.stringify(moves));
+  } else {
+    ok('a size can be tried against the rules before hosting anything',
+      `150m → ${moves[0]}m error, 600m → ${moves[1]}m, 1500m → ${moves[2]}m`);
+  }
+
+  const hosted = await p.evaluate(() => ({
+    M: Math.round(gameState.M),
+    jitter: pingJitterM(),
+    drawable: document.getElementById('boundary-map').closest('.card').style.display,
+  }));
+  if (Math.abs(hosted.M - 1200) > 5) {
+    finding('bug', 'solo ignores the size you asked for',
+      `asked for 1200m, got M=${hosted.M}`);
+  } else if (hosted.drawable !== 'block') {
+    finding('bug', 'solo gives you no way to move or redraw the play area',
+      'the boundary card is hidden');
+  } else {
+    ok('solo honours the size you set and lets you redraw it',
+      `M=${hosted.M}, readings wrong by ${hosted.jitter}m, boundary map shown`);
+  }
+
+  // Put the area somewhere else entirely and check the game goes with it.
+  const moved = await p.evaluate(async () => {
+    const away = { lat: 55.9533, lng: -3.1883 };   // nowhere near the default
+    const pts = squareBoundaryAround(away, 900);
+    boundaryPoints = pts.slice();
+    const r = await setBoundary(pts);
+    updateBoundaryInfo();
+    return { M: Math.round(r.M), rejected: !!r.rejected, away };
+  });
+  await p.click('#btn-start-game');
+  await p.waitForSelector('#view-game.active', { timeout: 20000 });
+  await p.waitForTimeout(2500);
+  const placed = await p.evaluate(([away]) => {
+    const bots = Object.values(playersState).filter((x) => x.isBot && x.realLat != null);
+    return {
+      M: Math.round(M),
+      jitter: pingJitterM(),
+      meAway: myPos ? Math.round(distanceM(myPos, away)) : null,
+      bots: bots.length,
+      allThere: bots.every((x) => distanceM({ lat: x.realLat, lng: x.realLng }, away) < 1200),
+    };
+  }, [moved.away]);
+
+  if (moved.rejected || Math.abs(placed.M - 901) > 10) {
+    finding('bug', 'redrawing the solo play area does not take',
+      `M=${placed.M}, rejected ${moved.rejected}`);
+  } else if (!placed.bots || !placed.allThere || placed.meAway == null || placed.meAway > 1200) {
+    finding('bug', 'the game does not start where the area was drawn',
+      `you ${placed.meAway}m away, ${placed.bots} bots, all inside: ${placed.allThere}`);
+  } else {
+    ok('the game starts wherever you put the area',
+      `M=${placed.M}, readings wrong by ${placed.jitter}m, `
+      + `you and all ${placed.bots} opponents inside it`);
+  }
+  await ctx.close();
   return errors;
 };
 

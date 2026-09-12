@@ -50,6 +50,7 @@
 
     <label>Play area (metres, square side) — refine by drawing a boundary next</label>
     <input id="input-area-side" type="number" value="400">
+    <p class="muted" id="area-preview"></p>
     <label>Game length (minutes)</label>
     <input id="input-length" type="number" value="90">
     <label>End condition</label>
@@ -99,7 +100,9 @@
     <div class="card">
       <h2>Boundary</h2>
       <p class="muted">Tap the map to drop corners. Three or more sets the play area,
-        which drives every distance rule in the game.</p>
+        which drives every distance rule in the game — the numbers underneath
+        update as you draw. <strong>Find me</strong> jumps to where you are;
+        otherwise pan anywhere in the world.</p>
       <div id="boundary-map"></div>
       <div class="row">
         <button id="btn-boundary-locate" class="secondary">Find me</button>

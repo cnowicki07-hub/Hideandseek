@@ -97,6 +97,20 @@ One rule changes: there is nobody to read four letters to, so **catching is
 reaching** — get within 20m and the Catch button lights up. Tokens indoors
 are exact, unlike GPS, which is what makes that fair.
 
+**Solo is also the mode to test the scaling in**, so unlike the living room it
+does not fix the play area. Type any size on the landing form and the rules it
+produces are previewed live underneath as you type — readings, tripwires,
+disarm, totems, the boundary warning — before you commit to anything. Then in
+the lobby you get the boundary map: **Find me**, or pan anywhere in the world,
+drop corners, and the same numbers update as you draw. The game starts where
+you put the area, with the opponents scattered inside it.
+
+The landing preview deliberately leaves *durations* out. Indoor rounds
+compress every time value about ninefold, and that scaling is only applied
+once the game exists — quoting a sabotage time on the landing form would print
+a number that changes the moment you press Host. Distances do not move: they
+come from the area alone.
+
 Two things came out of playing it rather than writing it. Bot seekers were
 probing all through the head start, because driving them from this client
 means none of `powerBlockedReason`'s gates apply to them automatically — the
