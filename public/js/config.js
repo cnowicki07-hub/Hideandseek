@@ -286,6 +286,26 @@ const CONFIG = {
     // A bot hider waits this long after being pinged before spending on
     // cover, so it looks like a decision rather than a reflex.
     reactMs: 2500,
+    // How often a bot seeker sets out to close more ground down. Between
+    // these it plays normally; when one is due it stops taking speculative
+    // sweeps and saves, because at 60 a bot that always probes first
+    // oscillates between 10 and 40 charge and can never afford one at all.
+    // Saving from 10 takes about twenty seconds, so this leaves most of the
+    // time for actually hunting.
+    totemIntervalMs: 600000,
+    // How long a bot will hold off sweeping while it saves for one. It has to
+    // be longer than the save actually takes — sixty charge at fifteen a
+    // minute is four minutes from empty — or the bot gives up every time and
+    // never places anything. Without any limit at all, a bot whose income is
+    // going elsewhere saves for a totem it can never afford and stops
+    // hunting entirely.
+    maxSaveMs: 300000,
+    // Wires are cheap, but cheap is not free: at five charge every twenty
+    // seconds a bot was spending its entire income on them and never
+    // affording anything else. Paced against the regen rate instead, they
+    // cost well under a fifth of what comes in.
+    wireIntervalMs: 120000,
+    maxWires: 5,
     maxBots: 7,
     names: ['Wren', 'Ash', 'Fen', 'Mox', 'Pike', 'Juno', 'Rook'],
   },
@@ -404,6 +424,13 @@ function applyGameMode(mode) {
   // long a real phone takes to lock and how fast a person reads their screen,
   // neither of which cares that the round is ten minutes long. The two that
   // are about game time do scale.
+  // A compressed round needs the ground closing down faster too, or a
+  // ten-minute game ends before the second totem goes up.
+  CONFIG.solo.totemIntervalMs = shorter(CONFIG.solo.totemIntervalMs);
+  CONFIG.solo.maxSaveMs = shorter(CONFIG.solo.maxSaveMs);
+  CONFIG.solo.wireIntervalMs = shorter(CONFIG.solo.wireIntervalMs);
+  CONFIG.solo.leadTrustMs = shorter(CONFIG.solo.leadTrustMs);
+
   CONFIG.offline.debtPerMs = shorter(CONFIG.offline.debtPerMs);
   CONFIG.offline.awayAfterMs = shorter(CONFIG.offline.awayAfterMs);
 

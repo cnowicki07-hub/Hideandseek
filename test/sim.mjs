@@ -607,7 +607,7 @@ SCENARIOS.solo = async () => {
 
   // Let it play.
   let caught = 0;
-  for (let r = 0; r < 12; r++) {
+  for (let r = 0; r < 22; r++) {
     await p.waitForTimeout(2500);
     const s = await p.evaluate(() => ({
       status: gameState.status,
@@ -627,6 +627,8 @@ SCENARIOS.solo = async () => {
     dots: Object.values(playersState).reduce((a, x) => a + (x.pings || []).length, 0),
     stale: Object.values(playersState).filter((x) => x.isBot && playerUnavailable(x)).length,
     tracks: Object.values(playersState).filter((x) => x.isBot && (x.track || []).length > 1).length,
+    totems: Object.keys(totemsState).length,
+    wires: Object.keys(tripwiresState).length,
   }));
 
   if (final.moved < 4) {
@@ -646,6 +648,25 @@ SCENARIOS.solo = async () => {
       `${early} dots before the seekers were released — real seekers are held`);
   } else {
     ok('bot seekers are held at the start line like everyone else');
+  }
+
+  // Totems are how a seeker hems the ground in, and a wire is the cheap
+  // exact reading. A bot that only ever probes is playing a third of the
+  // game — which is exactly what it was doing until the charge budget was
+  // sorted out, because a probe at 40 never leaves 60 for a totem.
+  if (!final.totems) {
+    finding('bug', 'bot seekers never place a totem',
+      'totems are the tool for closing the play area down, and none went up');
+  } else if (!final.wires) {
+    finding('bug', 'bot seekers never lay a tripwire',
+      'the cheapest exact reading in the game, and none were laid');
+  } else if (!final.dots) {
+    finding('bug', 'bot seekers stopped hunting to afford their kit',
+      `${final.totems} totems and ${final.wires} wires, but nothing was ever pinged`);
+  } else {
+    ok('bot seekers use the whole kit, not just the probe',
+      `${final.totems} totem(s), ${final.wires} wire(s), ${final.dots} dot(s) — `
+      + 'closing the ground down and still hunting');
   }
   await ctx.close();
 

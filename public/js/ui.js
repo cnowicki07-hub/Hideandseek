@@ -133,7 +133,12 @@ function setBoundaryWarning(dist) { boundaryWarningM = dist; }
 
 function initMap() {
   if (mapReady) return;
-  map = L.map('map', { zoomControl: false });
+  // No attribution box on the play map. Leaflet's own credit line carries a
+  // flag and a link, and neither belongs over a game you are reading at a
+  // glance in a field. OpenStreetMap still has to be credited — that is a
+  // licence condition, not a preference — so it moved into the key, which is
+  // where somebody looking for it would look.
+  map = L.map('map', { zoomControl: false, attributionControl: false });
   map.setView([51.5, -0.1], 15); // recentres on first real GPS fix
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; OpenStreetMap contributors',
@@ -429,7 +434,7 @@ let boundaryShape = null;
 
 function initBoundaryMap() {
   if (boundaryMap) return;
-  boundaryMap = L.map('boundary-map', { zoomControl: true });
+  boundaryMap = L.map('boundary-map', { zoomControl: true, attributionControl: false });
   boundaryMap.setView([51.5, -0.1], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '&copy; OpenStreetMap contributors',
@@ -1390,6 +1395,14 @@ function renderKey() {
   rows.push(keyRow('dot', `background:${MAP.violet}`, 'Violet dot',
     'A hider the Snitch surveyed for you.'));
 
+  // The credit OpenStreetMap's licence requires, kept somewhere it can be
+  // read rather than pinned over the map.
+  rows.push('<h4>Maps</h4>');
+  rows.push('<div class="key-row"><span class="key-note">Map data '
+    + '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" '
+    + 'rel="noopener">OpenStreetMap</a> contributors. Drawn with Leaflet.'
+    + '</span></div>');
+
   el('key-body').innerHTML = rows.join('')
     + `<div class="key-toggle"><span>Names and ages on dots</span>`
     + `<button class="secondary" id="btn-toggle-labels">${toggleOn('labels') ? 'On' : 'Off'}</button></div>`
@@ -2109,7 +2122,7 @@ function renderReplay() {
   holder.style.display = 'block';
 
   if (!replayMap) {
-    replayMap = L.map('replay-map', { zoomControl: true });
+    replayMap = L.map('replay-map', { zoomControl: true, attributionControl: false });
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '&copy; OpenStreetMap contributors',
     }).addTo(replayMap);

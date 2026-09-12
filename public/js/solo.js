@@ -33,6 +33,9 @@ function mindFor(id) {
       seenDotAt: {},         // the last dot this bot has already reacted to
       lastThoughtAt: 0,
       lastPingedAt: 0,
+      // Play for a bit before setting out to close ground down, so a game
+      // does not open with everybody standing still saving up.
+      nextTotemAt: Date.now() + CONFIG.solo.totemIntervalMs / 3,
       nextChatAt: Date.now() + 30000 + Math.random() * 60000,
       declaredAt: 0,
     };
@@ -215,6 +218,79 @@ async function botScan(id, at) {
   return bearings[Math.floor(Math.random() * bearings.length)];
 }
 
+// Totems are how a seeker hems the ground in: permanent, area-wide, and
+// they report anyone inside exactly. A bot puts them where they close space
+// down — out at the edges of what is still open, and on top of a lead when
+// it has one, so the hiders lose the room they were using.
+function totemSpot(at, best) {
+  const live = Object.values(totemsState).filter((t) => t.status !== 'destroyed');
+  // Drop it straight on a fresh lead: that is the ground they are actually in.
+  if (best && !live.some((t) => distanceM(t, best.lead) < t.radiusM)) {
+    return { lat: best.lead.lat, lng: best.lead.lng };
+  }
+  // Otherwise find the most open ground left, by sampling and keeping the
+  // candidate furthest from anything already watched.
+  let bestSpot = null;
+  let bestGap = -1;
+  for (let i = 0; i < 24; i++) {
+    const c = somewhereInside(at, 0.45 * activeM());
+    const gap = live.length
+      ? Math.min(...live.map((t) => distanceM(c, t)))
+      : distanceM(c, at);
+    if (gap > bestGap) { bestGap = gap; bestSpot = c; }
+  }
+  return bestSpot;
+}
+
+async function maybeLayTotem(id, mind, at, best, now) {
+  const c = CONFIG.seekerPowers.totem;
+  if (now < (mind.nextTotemAt || 0)) return false;
+  const live = Object.values(totemsState).filter((t) => t.status !== 'destroyed').length;
+  if (live >= c.maxLive) return false;
+  // No reserve on top: the bot has already given up sweeping to afford this,
+  // and asking for the price of a probe as well pushes it out of reach.
+  if (currentCharge(playersState[id]) < c.cost) return false;
+
+  const spot = totemSpot(at, best);
+  if (!spot) return false;
+  if (!(await botSpend(id, c.cost))) return false;
+
+  const radiusM = totemRadiusM();
+  await gameRef().collection('totems').add({
+    placedBy: id, lat: spot.lat, lng: spot.lng,
+    radiusM, requiredS: totemSabotageSeconds(radiusM),
+    status: 'active', createdAt: now,
+    presence: {}, sabotageProgressS: 0, lastAccrualAt: 0,
+    lastPingAt: 0, recentPings: [],
+  });
+  mind.nextTotemAt = now + CONFIG.solo.totemIntervalMs;
+  mind.savingSince = 0;
+  return true;
+}
+
+// Cheap, exact, and the only reading in the game that is not fuzzy. A bot
+// lays them as it walks, which is what they are for — you cannot aim one, so
+// the only way to use them is to keep leaving them behind you.
+async function maybeLayTripwire(id, mind, at, now) {
+  if (now < (mind.nextWireAt || 0)) return false;
+  const c = CONFIG.seekerPowers.tripwire;
+  // Five charge, so it never competes with anything — but it has to leave a
+  // probe affordable afterwards, or a bot hovers just under the price of a
+  // sweep all game and never takes one.
+  if (currentCharge(playersState[id])
+      < c.cost + CONFIG.seekerPowers.probe.cost + CONFIG.solo.seekerReserve) return false;
+  // Not on top of one it already laid.
+  const mine = Object.values(tripwiresState).filter((w) => w.placedBy === id && !w.triggered);
+  if (mine.some((w) => distanceM(at, w) < tripwireRadiusM() * 2)) return false;
+  if (mine.length >= CONFIG.solo.maxWires) return false;
+  if (!(await botSpend(id, c.cost))) return false;
+  await gameRef().collection('tripwires').add({
+    placedBy: id, lat: at.lat, lng: at.lng, triggered: false, placedAt: now,
+  });
+  mind.nextWireAt = now + CONFIG.solo.wireIntervalMs;
+  return true;
+}
+
 async function thinkAsSeeker(id, mind, now) {
   const p = playersState[id];
   // Held at the start line exactly like a person is. Driving bots from this
@@ -238,6 +314,15 @@ async function thinkAsSeeker(id, mind, now) {
   }
 
   const best = freshestLead(mind);
+
+  // Ground work, before anything else. The first version of this put both of
+  // these behind the "no lead" branch, which meant that once the probing
+  // started — and it always does — the bot never laid a wire or a totem
+  // again. They are not what you do when you have run out of ideas; they are
+  // how a seeker closes the map down while chasing.
+  await maybeLayTotem(id, mind, at, best, now);
+  await maybeLayTripwire(id, mind, at, now);
+
   if (best) {
     // Walk at the dot. It is up to 30m out and minutes old, so this is a
     // search, not an interception.
@@ -248,18 +333,31 @@ async function thinkAsSeeker(id, mind, now) {
     return;
   }
 
-  // Nothing to go on. A tripwire is almost free and the only exact reading
-  // in the game, so lay one wherever it happens to be standing before
-  // spending on anything bigger.
-  const spare = currentCharge(p) - CONFIG.solo.seekerReserve;
-  if (spare >= CONFIG.seekerPowers.tripwire.cost * 3 && Math.random() < 0.3) {
-    if (await botSpend(id, CONFIG.seekerPowers.tripwire.cost)) {
-      await gameRef().collection('tripwires').add({
-        placedBy: id, lat: at.lat, lng: at.lng, triggered: false, placedAt: now,
-      });
+  // Saving up, when one is due. A probe fires at 40 charge and a totem needs
+  // 70, so a bot that always takes the speculative sweep oscillates between
+  // 10 and 40 and can never afford the thing that closes the map down. When
+  // a totem is due it gives up the blind sweep — the cheapest thing to give
+  // up — until it has paid for one. A real lead is still chased above, so it
+  // never stops hunting to do this.
+  const liveTotems = Object.values(totemsState).filter((t) => t.status !== 'destroyed').length;
+  const totemDue = now >= (mind.nextTotemAt || 0) && liveTotems < CONFIG.seekerPowers.totem.maxLive;
+  if (totemDue) {
+    // Bounded, or a bot whose income is going on wires saves for a totem it
+    // can never afford and quietly stops hunting altogether — which is what
+    // happened the first time this was tried.
+    if (!mind.savingSince) mind.savingSince = now;
+    if (now - mind.savingSince < CONFIG.solo.maxSaveMs) {
+      if (!mind.dest) mind.dest = somewhereInside(at, 200);
       return;
     }
+    // Give up on this one and get back to work.
+    mind.savingSince = 0;
+    mind.nextTotemAt = now + CONFIG.solo.totemIntervalMs;
+  } else {
+    mind.savingSince = 0;
   }
+
+  const spare = currentCharge(p) - CONFIG.solo.seekerReserve;
   if (spare >= CONFIG.seekerPowers.probe.cost) {
     const towards = mind.sweepBearing != null
       ? destinationPoint(at, mind.sweepBearing, 400)

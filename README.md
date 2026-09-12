@@ -111,14 +111,26 @@ once the game exists — quoting a sabotage time on the landing form would print
 a number that changes the moment you press Host. Distances do not move: they
 come from the area alone.
 
-Two things came out of playing it rather than writing it. Bot seekers were
-probing all through the head start, because driving them from this client
-means none of `powerBlockedReason`'s gates apply to them automatically — the
-ones that matter are now stated explicitly. And bot hiders fled 200m on every
-single ping, which made a seeker's last thirty metres impossible to close; a
-bot that reacts perfectly is not an opponent, it is a wall. They sit tight
-about half the time on a first reading now, and only really run when pinged
-twice in quick succession, which is roughly what a person does.
+Things that only came out of playing it rather than writing it:
+
+- Bot seekers were **probing all through the head start**, because driving
+  them from this client means none of `powerBlockedReason`'s gates apply to
+  them automatically. The ones that matter are stated explicitly now.
+- Bot hiders **fled 200m on every single ping**, which made a seeker's last
+  thirty metres impossible to close. A bot that reacts perfectly is not an
+  opponent, it is a wall. They sit tight about half the time on a first
+  reading now, and only really run when pinged twice in quick succession.
+- Bot seekers **only ever probed** — no totems, no tripwires, so they were
+  playing a third of the game and never closed the ground down. That turned
+  out to be a budget problem, not a logic one. A probe fires at 40 charge and
+  a totem costs 60, so a bot that always takes the sweep oscillates between
+  10 and 40 and can never afford one; and laying a wire every 20 seconds at 5
+  charge spends the entire income at the regen rate. Now a seeker gives up
+  the *speculative* sweep while a totem is due — a real lead is still chased
+  — wires are paced well under the income and always leave a probe
+  affordable, and the saving is bounded so a bot can never get stuck hoarding
+  for something it cannot reach. Totems go where they close space down:
+  straight onto a fresh lead, or otherwise the most open ground left.
 
 ## 1. Run it locally
 
@@ -371,6 +383,19 @@ trails are never jittered either.
 One thing still pings for free: **leaving the boundary**. Step outside and the
 game gives your position away over and over until you come back, and nothing
 you can buy will stop it.
+
+## Maps and attribution
+
+The play map carries **no attribution control**. Leaflet's own credit line
+includes a flag and a link, and neither belongs over a game you are reading
+at a glance in a field — the same reason nothing else on that map is
+labelled.
+
+OpenStreetMap still has to be credited: that is a licence condition, not a
+preference. The credit moved into the **key**, under its own heading, which
+is where someone looking for it would look, and it sits under the boundary
+map in the lobby and the walk-through map at the end. The map data is still
+OpenStreetMap's and still says so.
 
 ## Reading the map
 
