@@ -327,7 +327,7 @@ never covers the safety equipment.
 |---|---|---|
 | Disarm | 15 | Destroys hidden tripwires within 50m. Spend it before a gate or a bridge. |
 | Go quiet | 20 | The next ping *aimed at you* simply fails. A wave washes over you and reports nothing. Lasts 3 minutes or until it eats one. |
-| Decoy | 35 | For 3 minutes, anything that pings you pings a fake you instead, walking off at 3 km/h on a bearing you choose. Real dots, wrong place, moving. |
+| Decoy | 35 | For 3 minutes, anything that pings you pings a fake you instead, walking off at 3 km/h on a bearing you choose. Real dots, wrong place, moving. You — and only you — watch it go, as a dashed green ring trailing back to where you cast it. |
 | Seeker scan | 40 | Pins every seeker on your map, exactly. Your only way of ever seeing them. |
 
 Plus **Snitch** (20), which only unlocks while you are being hunted: sell out
@@ -336,7 +336,10 @@ another hider to the seeker chasing you. They are never told it was you.
 **There is no cooldown between powers.** Charge is the whole limiter: the
 regen rate already decides how often anyone can act, and a minute of enforced
 silence on top of it only made people miss the moment they had been saving
-for. Spend it as fast as you can earn it.
+for. Spend it as fast as you can earn it. The one thing you cannot do is
+start a power that is already running — you cannot stack two decoys, or
+re-arm Go quiet while the first one is still waiting to eat a ping — but
+every *other* power stays in your hand the whole time one is up.
 
 **The Hunt** costs no charge at all — it is gated on the game going ten
 minutes without a capture, and it is the answer to a stalemate rather than a

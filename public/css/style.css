@@ -551,6 +551,18 @@ body.daylight h1 { animation: none; }
   pointer-events: none;
 }
 .dot-label.mine { color: #4ade80; }
+
+/* Your decoy, and nobody else's. Same green as your own trail so it reads as
+   you, italic so it reads as a lie. */
+.decoy-label {
+  font-size: 11px; font-weight: 700; font-style: italic; letter-spacing: 0.04em;
+  color: #4ade80; white-space: nowrap;
+  width: auto !important; height: auto !important; margin: 0 !important;
+  transform: translate(-50%, -210%);
+  text-shadow: 0 0 4px #000, 0 1px 3px #000;
+  pointer-events: none;
+}
+body.daylight .decoy-label { color: #12632f; text-shadow: 0 0 4px #fff, 0 1px 2px #fff; }
 .dot-label.stale { color: var(--amber); }
 body.daylight .dot-label { color: #1a0c0f; text-shadow: 0 0 4px #fff, 0 1px 2px #fff; }
 body.daylight .dot-label.mine { color: #12632f; }

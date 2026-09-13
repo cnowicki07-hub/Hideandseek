@@ -1394,6 +1394,11 @@ function renderKey() {
     + 'way they are — never how far.'));
   rows.push(keyRow('dot', `background:${MAP.violet}`, 'Violet dot',
     'A hider the Snitch surveyed for you.'));
+  if (!seeker) {
+    rows.push(keyRow('outline', `color:${MAP.own}`, 'Dashed green ring and line',
+      'Your decoy, and the way it has walked since you cast it. Only you can '
+      + 'see it — everything trying to ping you is pinging that instead.'));
+  }
 
   // The credit OpenStreetMap's licence requires, kept somewhere it can be
   // read rather than pinned over the map.
@@ -1675,6 +1680,7 @@ function renderWorld() {
   renderTrails(p, now, add);
   renderReveals(p, now, add);
   renderScanGlow();
+  renderMyDecoy(p, now);
 
   // Panic markers — exact, to everyone, permanently.
   panicAlerts.forEach((e) => {
@@ -1842,6 +1848,64 @@ function renderReveals(p, now, add) {
 
   // No hunt cone. A hunt reports as ordinary dots on the hunted player's
   // trail, which is what lets Go quiet and Decoy answer it.
+}
+
+// ---------- your decoy ----------
+//
+// A decoy was invisible: you paid 35 charge, got a toast, and then had to
+// take on faith that anything was happening at all. Now you watch it go —
+// where it set off from, where it has walked to, and how long it has left.
+//
+// Only you see it. Showing it to a seeker would defeat the entire point,
+// and showing it to other hiders would tell them something about you that
+// nobody paid for. It lives outside worldLayer on its own marker so it can
+// be animated smoothly without redrawing the rest of the map.
+
+let decoyMarker = null;
+let decoyLine = null;
+let decoyLabel = null;
+let decoyTimer = null;
+
+function clearDecoyArt() {
+  [decoyMarker, decoyLine, decoyLabel].forEach((l) => { if (l) map.removeLayer(l); });
+  decoyMarker = decoyLine = decoyLabel = null;
+  if (decoyTimer) { clearInterval(decoyTimer); decoyTimer = null; }
+}
+
+function renderMyDecoy(p, now) {
+  if (!mapReady) return;
+  const d = p && p.decoy;
+  if (!d || (now || Date.now()) >= d.expiresAt) { clearDecoyArt(); return; }
+
+  const at = decoyPositionAt(d, now);
+  const from = [d.originLat, d.originLng];
+  const left = Math.max(0, Math.ceil((d.expiresAt - (now || Date.now())) / 1000));
+
+  if (!decoyMarker) {
+    // Hollow, dashed, in your own colour: recognisably you, recognisably
+    // not really you.
+    decoyLine = L.polyline([from, [at.lat, at.lng]], {
+      color: MAP.own, weight: 2, opacity: 0.5, dashArray: '4 6',
+    }).addTo(map);
+    decoyMarker = L.circleMarker([at.lat, at.lng], {
+      radius: CONFIG.ping.dotRadiusPx + 1,
+      color: MAP.own, fill: false, weight: 2, dashArray: '3 3',
+    }).addTo(map);
+    decoyLabel = L.marker([at.lat, at.lng], {
+      icon: L.divIcon({ className: 'decoy-label', html: '', iconSize: null }),
+      interactive: false, keyboard: false,
+    }).addTo(map);
+    // Its own clock, so it slides rather than jumping once a rules tick.
+    if (!decoyTimer) decoyTimer = setInterval(() => {
+      const me2 = me();
+      safely('decoy', () => renderMyDecoy(me2, Date.now()));
+    }, 500);
+  } else {
+    decoyLine.setLatLngs([from, [at.lat, at.lng]]);
+    decoyMarker.setLatLng([at.lat, at.lng]);
+    decoyLabel.setLatLng([at.lat, at.lng]);
+  }
+  decoyLabel.getElement().innerHTML = `Decoy · ${left}s`;
 }
 
 // ---------- Scan: direction only, at the edge of the screen ----------

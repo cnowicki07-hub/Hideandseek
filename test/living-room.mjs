@@ -177,6 +177,48 @@ const probed = await until(host, () => Object.values(playersState)
   .some((p) => (p.pings || []).length > 0));
 check('a probe still puts dots on the map indoors', probed === true);
 
+// A hider's hand must not go dead the moment they cast something. Casting
+// Go quiet used to set `activePower` for its whole duration, which greyed
+// out every other power for three minutes — a longer blanking period than
+// the cooldown that was deliberately removed.
+const hand = await pages[1].evaluate(async () => {
+  await playerRef().update({ cooldownUntil: 0, chargeCheckpoint: 100, chargeCheckpointAt: Date.now() });
+  const keys = Object.keys(POWERS).filter((k) => POWERS[k].role === 'hider');
+  const before = {}; keys.forEach((k) => { before[k] = powerBlockedReason(k, me()); });
+  await activatePower('go_quiet', {});
+  await playerRef().update({ chargeCheckpoint: 100, chargeCheckpointAt: Date.now() });
+  const after = {}; keys.forEach((k) => { after[k] = powerBlockedReason(k, me()); });
+  return { before, after, quiet: me().goQuietUntil > Date.now() };
+});
+check('a hider starts with their whole hand available',
+  Object.values(hand.before).every((v) => v === null), JSON.stringify(hand.before));
+check('Go quiet bars only itself, not the rest of the hand',
+  hand.quiet && /already running/.test(hand.after.go_quiet || '')
+    && Object.entries(hand.after).every(([k, v]) => k === 'go_quiet' || v === null),
+  JSON.stringify(hand.after));
+
+// And a decoy has to be something you can watch, or nobody believes the 35
+// charge did anything.
+const decoy = await pages[1].evaluate(async () => {
+  await playerRef().update({ chargeCheckpoint: 100, chargeCheckpointAt: Date.now() });
+  await activatePower('decoy', { bearing: 90 });
+  return !!me().decoy;
+});
+const drawn = await until(pages[1], () => {
+  const label = document.querySelector('.decoy-label');
+  return label && /Decoy . \d+s/.test(label.textContent) ? label.textContent : null;
+}, null, 10000);
+const walked = await until(pages[1], () => {
+  const d = me().decoy; if (!d) return null;
+  const at = decoyPositionAt(d, Date.now());
+  const m = distanceM({ lat: d.originLat, lng: d.originLng }, at);
+  return m > 3 ? Math.round(m) : null;
+}, null, 15000);
+check('your decoy is drawn on your own map, counting down', decoy && !!drawn, drawn || 'nothing drawn');
+check('your decoy visibly walks away from where you cast it', !!walked, `${walked}m from origin`);
+const leaked = await pages[0].evaluate(() => !!document.querySelector('.decoy-label'));
+check('nobody else can see your decoy', !leaked);
+
 console.log('\n' + '='.repeat(56));
 const failed = results.filter((r) => !r.pass);
 console.log(`${results.length - failed.length}/${results.length} checks passed`);

@@ -150,6 +150,7 @@ const POWERS = {
 
   go_quiet: {
     role: 'hider', label: 'Go quiet',
+    running: (p, now) => !!(p.goQuietUntil && now < p.goQuietUntil),
     desc: 'The next attempt to ping you simply fails. A seeker can sweep right '
       + 'over you and get nothing back. Lasts 3 minutes or until it eats a ping.',
     cost: () => CONFIG.hiderPowers.go_quiet.cost,
@@ -165,6 +166,7 @@ const POWERS = {
 
   decoy: {
     role: 'hider', label: 'Decoy',
+    running: (p, now) => !!(p.decoy && now < p.decoy.expiresAt),
     desc: 'A fake you walks off on a bearing you pick. For 3 minutes, anything '
       + 'that pings you pings the decoy instead — so seekers get real dots, in '
       + 'the wrong place, walking somewhere you are not.',
@@ -262,7 +264,12 @@ function powerBlockedReason(key, p, now) {
   if (inGrace(p)) return 'Conversion grace period.';
   if (p.lockedOutUntil && now < p.lockedOutUntil) return 'Locked out.';
   if (onCooldown(p)) return `Cooldown ${Math.ceil((p.cooldownUntil - now) / 1000)}s.`;
-  if (p.activePower && p.activePowerExpiresAt > now) return 'Another power is active.';
+  // Only the same power is barred while it runs. This used to bar every
+  // power for the whole duration, which meant casting Go quiet greyed out
+  // your entire hand for three minutes — a far longer blanking period than
+  // the cooldown that was deliberately removed, and the thing people were
+  // actually running into. Charge is the limiter; nothing else needs to be.
+  if (def.running && def.running(p, now)) return `${def.label} is already running.`;
   if (currentCharge(p) < def.cost()) return `Needs ${def.cost()} charge.`;
   if (def.guard) { const g = def.guard(); if (g) return g; }
   if (def.target !== 'hider' && !myPos) return 'No GPS fix yet.';
